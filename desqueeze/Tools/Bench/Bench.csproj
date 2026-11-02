@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Command-line harness for Desqueeze.Core, outside Unity.
+      dotnet run -c Release --project Tools/Bench -- selftest
+      dotnet run -c Release --project Tools/Bench -- desqueeze in.png out.jpg 1.5 0.5 MagicKernelSharp2021 Gamma Sigmoidal 0
+      dotnet run -c Release --project Tools/Bench -- speed big.png 1.5 0.5 MagicKernelSharp2021
+    LangVersion 9 matches what Unity 6 compiles, so code that builds here builds in Unity.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>desqueeze-bench</AssemblyName>
+    <RootNamespace>DesqueezeBench</RootNamespace>
+    <StartupObject>DesqueezeBench.Program</StartupObject>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../Assets/Desqueeze/Core/**/*.cs" />
+  </ItemGroup>
+</Project>

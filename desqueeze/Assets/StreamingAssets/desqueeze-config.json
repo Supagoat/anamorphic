@@ -1,0 +1,26 @@
+{
+    "presets": [
+        { "name": "1.33x", "factor": 1.33 },
+        { "name": "1.5x",  "factor": 1.5 },
+        { "name": "1.6x",  "factor": 1.6 }
+    ],
+    "defaultFactor": 1.5,
+    "customFactorMin": 1.0,
+    "customFactorMax": 3.0,
+
+    "defaultWidthShare": 0.5,
+
+    "widenMethod": "Detail",
+    "squeezeAxis": "Horizontal",
+
+    "defaultAlgorithm": "MagicKernelSharp2021",
+    "reduceLight": "Gamma",
+    "enlargeLight": "Sigmoidal",
+    "antiRinging": 0.0,
+
+    "defaultSaveFormat": "jpg",
+    "batchFileSuffix": "_desqueezed",
+
+    "uiScale": 0,
+    "maxZoom": 64
+}
