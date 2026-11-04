@@ -60,6 +60,9 @@ namespace Desqueeze.App
             WidenMethod wm;
             if (Enum.TryParse(GetString("Widen", s.Widen.ToString()), out wm) && Enum.IsDefined(typeof(WidenMethod), wm))
                 s.Widen = wm;
+            SqueezeDirection dir;
+            if (Enum.TryParse(GetString("Direction", s.Direction.ToString()), out dir) && Enum.IsDefined(typeof(SqueezeDirection), dir))
+                s.Direction = dir;
             try
             {
                 s.Validate();
@@ -80,6 +83,7 @@ namespace Desqueeze.App
             SetString("EnlargeLight", s.EnlargeLight.ToString());
             SetDouble("AntiRinging", s.AntiRinging);
             SetString("Widen", s.Widen.ToString());
+            SetString("Direction", s.Direction.ToString());
         }
 
         public static void LoadBatch(BatchOptions o, string defaultSuffix)

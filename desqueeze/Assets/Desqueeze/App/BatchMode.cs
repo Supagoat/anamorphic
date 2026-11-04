@@ -270,6 +270,7 @@ namespace Desqueeze.App
                         _itemProgress.BeginStage("Loading", 0f, 0.1f);
                         var img = await ImageLoader.LoadAsync(it.InputPath, ct);
                         _itemProgress.BeginStage("Resampling", 0.1f, 0.6f);
+                        var choice = AxisChooser.Choose(settings.Direction, img);
                         var outImg = await Task.Run(() => Desqueezer.Process(img, settings, _itemProgress, ct), ct);
                         img = null;
                         _itemProgress.BeginStage("Encoding", 0.7f, 0.3f);
@@ -282,7 +283,7 @@ namespace Desqueeze.App
                             FileUtil.WriteAllBytesSafely(path, bytes);
                         }, ct);
                         it.Status = BatchItemStatus.Done;
-                        it.Message = outImg.Width + " x " + outImg.Height;
+                        it.Message = outImg.Width + " x " + outImg.Height + (choice.IsVertical ? "   vertical (" + choice.Reason + ")" : "");
                         done++;
                     }
                     catch (OperationCanceledException)

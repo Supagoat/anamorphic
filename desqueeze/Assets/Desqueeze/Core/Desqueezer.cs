@@ -74,6 +74,8 @@ namespace Desqueeze.Core
     {
         /// <summary>
         /// De-squeezes <paramref name="source"/> according to <paramref name="settings"/>.
+        /// <paramref name="source"/> should be upright (see <see cref="Codecs.ImageIO.MakeUpright"/>); the squeeze
+        /// axis comes from <see cref="DesqueezeSettings.Direction"/> via <see cref="AxisChooser"/>.
         /// Returns a new image with the same channel layout and bit depth, carrying the source metadata.
         /// Runs on the calling thread and uses all cores; call it from a background task in UI code.
         /// </summary>
@@ -84,8 +86,46 @@ namespace Desqueeze.Core
             if (settings == null) throw new ArgumentNullException(nameof(settings));
             var s = settings.Clone();
             s.Validate();
-            var g = DesqueezeGeometry.Compute(source.Width, source.Height, s.Factor, s.WidthShare, s.Axis);
-            return Resize(source, g.OutputWidth, g.OutputHeight, s, progress, ct);
+            if (AxisChooser.Choose(s.Direction, source).Axis == SqueezeAxis.Horizontal)
+            {
+                var g = DesqueezeGeometry.Compute(source.Width, source.Height, s.Factor, s.WidthShare, SqueezeAxis.Horizontal);
+                return Resize(source, g.OutputWidth, g.OutputHeight, s, progress, ct);
+            }
+
+            // Vertical squeeze: turn the image a quarter turn so the squeeze runs horizontally, run exactly the horizontal
+            // pipeline, and turn the result back. When the camera's orientation tag says how it was turned, the internal
+            // turn undoes that, so the resampler sees the sensor's own pixels and the result is identical to
+            // de-squeezing the sideways file and rotating it afterwards.
+            int o = source.Metadata != null ? source.Metadata.SourceOrientation : 0;
+            int turn = Orientation.SwapsAxes(o) ? Orientation.Inverse(o) : Orientation.Rotate90Clockwise;
+            var turned = Orientation.Apply(source, turn);
+            var gt = DesqueezeGeometry.Compute(turned.Width, turned.Height, s.Factor, s.WidthShare, SqueezeAxis.Horizontal);
+            var r = Resize(turned, gt.OutputWidth, gt.OutputHeight, s, progress, ct);
+            turned = null;
+            ct.ThrowIfCancellationRequested();
+            var back = Orientation.Apply(r, Orientation.Inverse(turn));
+            back.Metadata = source.Metadata != null ? source.Metadata.Clone() : new ImageMetadata();
+            back.SourceFormat = source.SourceFormat;
+            return back;
+        }
+
+        /// <summary>The output geometry <see cref="Process"/> will produce for this image and these settings.</summary>
+        public static DesqueezeGeometry Geometry(PixelImage source, DesqueezeSettings settings)
+        {
+            var axis = AxisChooser.Choose(settings.Direction, source).Axis;
+            return DesqueezeGeometry.Compute(source.Width, source.Height, settings.Factor, settings.WidthShare, axis);
+        }
+
+        /// <summary>
+        /// The axis being enlarged when resizing between these sizes, if exactly one axis grows and the other does
+        /// not (the case the learned method handles).
+        /// </summary>
+        private static bool StretchAxis(int srcW, int srcH, int outW, int outH, out SqueezeAxis axis)
+        {
+            axis = SqueezeAxis.Horizontal;
+            if (outW > srcW && outH <= srcH) return true;
+            axis = SqueezeAxis.Vertical;
+            return outH > srcH && outW <= srcW;
         }
 
         /// <summary>Resamples to an explicit size using the algorithm and options in <paramref name="settings"/>.</summary>
@@ -123,11 +163,11 @@ namespace Desqueeze.Core
         public static bool UsesLearned(int srcW, int srcH, int outW, int outH, DesqueezeSettings s)
         {
             if (s.Widen == WidenMethod.Kernel || AxisSRModel.Default == null) return false;
-            bool horiz = s.Axis == SqueezeAxis.Horizontal;
-            int inLen = horiz ? srcW : srcH, outLen = horiz ? outW : outH;
-            int otherIn = horiz ? srcH : srcW, otherOut = horiz ? outH : outW;
-            double scale = (double)outLen / inLen;
-            return outLen > inLen && scale <= MaxLearnedScale && otherOut <= otherIn;
+            SqueezeAxis axis;
+            if (!StretchAxis(srcW, srcH, outW, outH, out axis)) return false;
+            bool horiz = axis == SqueezeAxis.Horizontal;
+            double scale = horiz ? (double)outW / srcW : (double)outH / srcH;
+            return scale <= MaxLearnedScale;
         }
 
         /// <summary>
@@ -139,7 +179,9 @@ namespace Desqueeze.Core
         {
             if (!UsesLearned(source.Width, source.Height, width, height, s)) return null;
             var model = AxisSRModel.Default;
-            bool horiz = s.Axis == SqueezeAxis.Horizontal;
+            SqueezeAxis axis;
+            StretchAxis(source.Width, source.Height, width, height, out axis);
+            bool horiz = axis == SqueezeAxis.Horizontal;
             int outLen = horiz ? width : height;
             bool shrinkOther = horiz ? height != source.Height : width != source.Width;
             var opts = new AxisSROptions
@@ -147,7 +189,7 @@ namespace Desqueeze.Core
                 UseNetwork = s.Widen == WidenMethod.Detail,
                 OutputBitDepth = shrinkOther ? 16 : source.BitDepth,   // keep precision for the second pass
             };
-            var grown = AxisSR.Upscale(source, outLen, s.Axis, model, opts,
+            var grown = AxisSR.Upscale(source, outLen, axis, model, opts,
                 ProgressTracker.Slice(progress, 0f, shrinkOther ? 0.85f : 1f), ct);
             if (!shrinkOther)
             {

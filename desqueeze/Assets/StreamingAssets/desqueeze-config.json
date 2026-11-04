@@ -11,7 +11,7 @@
     "defaultWidthShare": 0.5,
 
     "widenMethod": "Detail",
-    "squeezeAxis": "Horizontal",
+    "squeezeAxis": "Auto",
 
     "defaultAlgorithm": "MagicKernelSharp2021",
     "reduceLight": "Gamma",

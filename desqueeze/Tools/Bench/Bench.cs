@@ -35,6 +35,9 @@ namespace DesqueezeBench
                     case "jpeg-info": return JpegInfoCmd(args[1]);
                     case "speed": return Speed(args);
                     case "axissr": return AxisSRCmd(args);
+                    case "axissr-list": return AxisSRList(args);
+                    case "upright": return UprightCmd(args);
+                    case "exif-patch": return ExifPatchCmd(args);
                     default:
                         Console.WriteLine("unknown command " + args[0]);
                         return 1;
@@ -92,16 +95,18 @@ namespace DesqueezeBench
 
         private static int DesqueezeCmd(string[] a)
         {
-            // desqueeze in out factor share algo linear sigmoid ar
+            // desqueeze in out factor share algo reduce enlarge ar [Auto|Horizontal|Vertical]
+            // Like the app: the PNG is turned upright from its eXIf orientation, then the direction decides the axis.
             var bytes = File.ReadAllBytes(a[1]);
-            var img = PngCodec.Decode(bytes);
+            var img = ImageIO.MakeUpright(PngCodec.Decode(bytes));
             var s = ParseSettings(a[5], a[6], a[7], a[8]);
             s.Factor = double.Parse(a[3]);
             s.WidthShare = double.Parse(a[4]);
+            if (a.Length > 9) s.Direction = (SqueezeDirection)Enum.Parse(typeof(SqueezeDirection), a[9], true);
             var p = new ProgressTracker();
             var sw = Stopwatch.StartNew();
             var r = Desqueezer.Process(img, s, p);
-            Console.WriteLine("geometry " + DesqueezeGeometry.Compute(img.Width, img.Height, s.Factor, s.WidthShare) +
+            Console.WriteLine("geometry " + Desqueezer.Geometry(img, s) + ", " + AxisChooser.Choose(s.Direction, img) +
                               " in " + sw.ElapsedMilliseconds + " ms, progress " + p.Value);
             var fmt = ImageIO.FormatFromExtension(a[2]);
             File.WriteAllBytes(a[2], ImageIO.Encode(r, fmt));
@@ -168,6 +173,68 @@ namespace DesqueezeBench
             Console.WriteLine("axissr " + img.Width + "x" + img.Height + " -> " + r.Width + "x" + r.Height + " in " + sw.ElapsedMilliseconds +
                               " ms (model " + model.Name + ", net " + opts.UseNetwork + ", cores " + Environment.ProcessorCount + ")");
             File.WriteAllBytes(a[2], PngCodec.Encode(r, new PngEncodeOptions { Compression = System.IO.Compression.CompressionLevel.Fastest }));
+            return 0;
+        }
+
+        // axissr-list <list.txt> <model.bin>: each line "in.png out.png outLength X|Y none|cw|ccw".
+        // With cw/ccw the image is turned a quarter turn first, enlarged along X, and turned back
+        // (the alternative to transposing for a vertical squeeze).
+        private static int AxisSRList(string[] a)
+        {
+            var model = Desqueeze.Core.Resampling.AxisSRModel.Load(a[2]);
+            var opts = new Desqueeze.Core.Resampling.AxisSROptions();
+            int n = 0;
+            var sw = Stopwatch.StartNew();
+            foreach (var line in File.ReadAllLines(a[1]))
+            {
+                var f = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                if (f.Length < 5) continue;
+                var img = PngCodec.Decode(File.ReadAllBytes(f[0]));
+                int len = int.Parse(f[2]);
+                var axis = f[3] == "Y" ? SqueezeAxis.Vertical : SqueezeAxis.Horizontal;
+                int rot = f[4] == "cw" ? Orientation.Rotate90Clockwise : f[4] == "ccw" ? Orientation.Rotate90CounterClockwise : 0;
+                PixelImage r;
+                if (rot == 0)
+                {
+                    r = Desqueeze.Core.Resampling.AxisSR.Upscale(img, len, axis, model, opts);
+                }
+                else
+                {
+                    var turned = Orientation.Apply(img, rot);
+                    var up = Desqueeze.Core.Resampling.AxisSR.Upscale(turned, len, SqueezeAxis.Horizontal, model, opts);
+                    r = Orientation.Apply(up, Orientation.Inverse(rot));
+                }
+                File.WriteAllBytes(f[1], PngCodec.Encode(r, new PngEncodeOptions { Compression = System.IO.Compression.CompressionLevel.Fastest }));
+                n++;
+            }
+            Console.WriteLine("axissr-list: " + n + " images in " + sw.Elapsed.TotalSeconds.ToString("0.0") + " s");
+            return 0;
+        }
+
+        // upright <in.png> <out.png>: turn a PNG upright from its eXIf orientation (as the app's loader does).
+        private static int UprightCmd(string[] a)
+        {
+            var img = ImageIO.MakeUpright(PngCodec.Decode(File.ReadAllBytes(a[1])));
+            File.WriteAllBytes(a[2], PngCodec.Encode(img));
+            Console.WriteLine(Path.GetFileName(a[1]) + " orientation " + img.Metadata.SourceOrientation + " -> " + img.Width + "x" + img.Height +
+                              ", tag now " + ExifPatcher.ReadOrientation(img.Metadata.Exif));
+            return 0;
+        }
+
+        // exif-patch <in.jpg> <outPrefix>: orientation of a JPEG, plus its EXIF as read, with orientation 1, and as saved.
+        private static int ExifPatchCmd(string[] a)
+        {
+            var info = JpegInfo.Read(File.ReadAllBytes(a[1]));
+            if (info.Exif == null)
+            {
+                Console.WriteLine("no-exif");
+                return 0;
+            }
+            File.WriteAllBytes(a[2] + ".orig.tif", info.Exif);
+            File.WriteAllBytes(a[2] + ".o1.tif", ExifPatcher.WithOrientation(info.Exif, 1));
+            File.WriteAllBytes(a[2] + ".saved.tif",
+                ExifPatcher.WithoutThumbnail(ExifPatcher.WithDimensions(ExifPatcher.WithOrientation(info.Exif, 1), 1234, 567)));
+            Console.WriteLine("orientation " + ExifPatcher.ReadOrientation(info.Exif));
             return 0;
         }
 
@@ -378,12 +445,178 @@ namespace DesqueezeBench
                 Check(px == 9000 && py == 4000, "EXIF PixelXDimension/PixelYDimension patched (" + px + " x " + py + ")");
             }
 
+            OrientationTests(rnd);
+
             string modelPath = Path.Combine("Assets", "StreamingAssets", "desqueeze-axissr.bin");
             if (File.Exists(modelPath)) AxisSRTests(modelPath);
             else Console.WriteLine("(skipping cross-axis detail tests: run from the project root so " + modelPath + " is found)");
 
             Console.WriteLine(s_fail == 0 ? "ALL PASSED" : s_fail + " FAILED");
             return s_fail == 0 ? 0 : 1;
+        }
+
+        /// <summary>Minimal EXIF (TIFF) block: IFD0 with an Orientation SHORT, optionally linked to an empty IFD1.</summary>
+        internal static byte[] TestExif(bool littleEndian, int orientation, bool withThumbnailIfd)
+        {
+            if (littleEndian)
+                return new byte[]
+                {
+                    (byte)'I', (byte)'I', 42, 0, 8, 0, 0, 0,
+                    1, 0, 0x12, 0x01, 3, 0, 1, 0, 0, 0, (byte)orientation, 0, 0, 0,
+                    (byte)(withThumbnailIfd ? 26 : 0), 0, 0, 0,
+                    0, 0, 0, 0, 0, 0,
+                };
+            return new byte[]
+            {
+                (byte)'M', (byte)'M', 0, 42, 0, 0, 0, 8,
+                0, 1, 0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, (byte)orientation, 0, 0,
+                0, 0, 0, (byte)(withThumbnailIfd ? 26 : 0),
+                0, 0, 0, 0, 0, 0,
+            };
+        }
+
+        private static void OrientationTests(Random rnd)
+        {
+            Console.WriteLine("Camera orientation");
+
+            // A 3x2 image with distinct pixels: rows "a b c" / "d e f".
+            var abc = new PixelImage(3, 2, 1, new byte[] { 1, 2, 3, 4, 5, 6 });
+            var cw = Orientation.Apply(abc, Orientation.Rotate90Clockwise);
+            Check(cw.Width == 2 && cw.Height == 3 && Equal(cw.Data8, new byte[] { 4, 1, 5, 2, 6, 3 }),
+                "orientation 6 turns the stored pixels 90° clockwise (d a / e b / f c)");
+            var ccw = Orientation.Apply(abc, Orientation.Rotate90CounterClockwise);
+            Check(ccw.Width == 2 && ccw.Height == 3 && Equal(ccw.Data8, new byte[] { 3, 6, 2, 5, 1, 4 }),
+                "orientation 8 turns them 90° counter-clockwise (c f / b e / a d)");
+            var expected = new Dictionary<int, byte[]>
+            {
+                { 2, new byte[] { 3, 2, 1, 6, 5, 4 } },
+                { 3, new byte[] { 6, 5, 4, 3, 2, 1 } },
+                { 4, new byte[] { 4, 5, 6, 1, 2, 3 } },
+                { 5, new byte[] { 1, 4, 2, 5, 3, 6 } },
+                { 7, new byte[] { 6, 3, 5, 2, 4, 1 } },
+            };
+            bool known = true;
+            foreach (var kv in expected)
+                if (!Equal(Orientation.Apply(abc, kv.Key).Data8, kv.Value)) { known = false; Console.WriteLine("    orientation " + kv.Key + " wrong"); }
+            Check(known, "orientations 2, 3, 4, 5, 7 match the EXIF definitions on a 3x2 image");
+
+            bool inverse = true;
+            foreach (var ch in new[] { 1, 2, 3, 4 })
+                foreach (var depth in new[] { 8, 16 })
+                {
+                    var img = new PixelImage(17, 11, ch, depth);
+                    if (depth == 8) rnd.NextBytes(img.Data8);
+                    else for (int i = 0; i < img.Data16.Length; i++) img.Data16[i] = (ushort)rnd.Next(65536);
+                    for (int o = 1; o <= 8; o++)
+                    {
+                        var t = Orientation.Apply(img, o);
+                        bool dims = Orientation.SwapsAxes(o) ? t.Width == 11 && t.Height == 17 : t.Width == 17 && t.Height == 11;
+                        var back = Orientation.Apply(t, Orientation.Inverse(o));
+                        bool same = depth == 8 ? Equal(back.Data8, img.Data8) : Equal(back.Data16, img.Data16);
+                        if (!dims || !same) { inverse = false; Console.WriteLine("    round trip failed: o=" + o + " ch=" + ch + " depth=" + depth); }
+                    }
+                }
+            Check(inverse, "every orientation is undone by its inverse (1-4 channels, 8/16-bit)");
+
+            bool exifOk = true;
+            foreach (var le in new[] { true, false })
+                for (int o = 1; o <= 8; o++)
+                {
+                    var e = TestExif(le, o, true);
+                    if (ExifPatcher.ReadOrientation(e) != o) exifOk = false;
+                    if (ExifPatcher.ReadOrientation(ExifPatcher.WithOrientation(e, 1)) != 1) exifOk = false;
+                    var nt = ExifPatcher.WithoutThumbnail(e);
+                    if (nt[22] != 0 || nt[23] != 0 || nt[24] != 0 || nt[25] != 0 || ExifPatcher.ReadOrientation(nt) != o) exifOk = false;
+                }
+            Check(exifOk, "EXIF orientation read and reset, thumbnail link removed (Intel and Motorola byte order)");
+            Check(ExifPatcher.ReadOrientation(null) == 0 && ExifPatcher.ReadOrientation(new byte[] { 1, 2, 3 }) == 0 &&
+                  ExifPatcher.ReadOrientation(new byte[] { (byte)'M', (byte)'M', 0, 42, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0 }) == 0,
+                "missing or malformed EXIF reads as 'no orientation tag'");
+
+            // The camera wrote orientation 6 into a JPEG; the app's loader turns it upright and resets the tag.
+            {
+                var stored = new PixelImage(60, 40, 3, 8);
+                rnd.NextBytes(stored.Data8);
+                stored.Metadata.Exif = TestExif(false, 6, true);
+                var jpg = JpegEncoder.Encode(stored);
+                var info = JpegInfo.Read(jpg);
+                Check(ExifPatcher.ReadOrientation(info.Exif) == 6, "orientation tag survives a JPEG written and read back");
+                var up = ImageIO.MakeUpright(stored);
+                Check(up.Width == 40 && up.Height == 60 && up.Metadata.SourceOrientation == 6 &&
+                      ExifPatcher.ReadOrientation(up.Metadata.Exif) == 1 && ExifPatcher.ReadOrientation(stored.Metadata.Exif) == 6,
+                    "MakeUpright: 60x40 tagged 6 -> 40x60 upright, tag reset to 1, original remembered, source untouched");
+                var turnedByDecoder = Orientation.Apply(stored, 6);      // pixels upright, tag still 6
+                turnedByDecoder.Metadata.Exif = TestExif(true, 6, false);
+                var already = ImageIO.MakeUpright(turnedByDecoder, true);
+                Check(already == turnedByDecoder && already.Width == 40 && already.Height == 60 && already.Metadata.SourceOrientation == 6 && ExifPatcher.ReadOrientation(already.Metadata.Exif) == 1,
+                    "MakeUpright with a decoder that already turned the pixels: only the tag is reset");
+                var plain = new PixelImage(60, 40, 3, 8);
+                Check(ImageIO.MakeUpright(plain) == plain && plain.Metadata.SourceOrientation == 0, "no EXIF: image unchanged, orientation 0");
+                var outJpg = ImageIO.Encode(up, ImageFileFormat.Jpeg);
+                var outInfo = JpegInfo.Read(outJpg);
+                bool linkGone = outInfo.Exif != null && outInfo.Exif.Length >= 26 && outInfo.Exif[22] == 0 && outInfo.Exif[25] == 0;
+                Check(outInfo.Width == 40 && outInfo.Height == 60 && ExifPatcher.ReadOrientation(outInfo.Exif) == 1 && linkGone,
+                    "saved JPEG is upright with orientation 1 and no stale thumbnail link");
+
+                // PNG eXIf and an XMP packet with tiff:Orientation
+                var p = new PixelImage(30, 20, 3, 16);
+                for (int i = 0; i < p.Data16.Length; i++) p.Data16[i] = (ushort)rnd.Next(65536);
+                p.Metadata.Exif = TestExif(true, 8, false);
+                var xmp = System.Text.Encoding.ASCII.GetBytes("XML:com.adobe.xmp\0\0\0\0\0<x:xmpmeta><rdf:Description tiff:Orientation=\"8\"/></x:xmpmeta>");
+                p.Metadata.PngChunks.Add(new PngChunk("iTXt", xmp));
+                var pu = ImageIO.MakeUpright(PngCodec.Decode(PngCodec.Encode(p)));
+                string x = "";
+                foreach (var c in pu.Metadata.PngChunks)
+                    if (c.Type == "iTXt") x = System.Text.Encoding.ASCII.GetString(c.Data);
+                Check(pu.Width == 20 && pu.Height == 30 && pu.Metadata.SourceOrientation == 8 && x.Contains("tiff:Orientation=\"1\""),
+                    "PNG with eXIf orientation 8: turned upright, XMP orientation reset too");
+            }
+
+            // Auto direction
+            Check(AxisChooser.Choose(SqueezeDirection.Auto, 4000, 6000, 6).IsVertical &&
+                  AxisChooser.Choose(SqueezeDirection.Auto, 4000, 6000, 8).IsVertical &&
+                  !AxisChooser.Choose(SqueezeDirection.Auto, 6000, 4000, 1).IsVertical &&
+                  !AxisChooser.Choose(SqueezeDirection.Auto, 6000, 4000, 3).IsVertical &&
+                  !AxisChooser.Choose(SqueezeDirection.Auto, 6000, 4000, 0).IsVertical &&
+                  AxisChooser.Choose(SqueezeDirection.Auto, 4000, 6000, 0).IsVertical &&
+                  AxisChooser.Choose(SqueezeDirection.Auto, 4000, 6000, 1).IsVertical &&
+                  !AxisChooser.Choose(SqueezeDirection.Auto, 5000, 5000, 0).IsVertical,
+                "Auto: tag 5-8 or portrait shape -> vertical; level camera or landscape -> horizontal");
+            Check(!AxisChooser.Choose(SqueezeDirection.Horizontal, 4000, 6000, 6).IsVertical &&
+                  AxisChooser.Choose(SqueezeDirection.Vertical, 6000, 4000, 1).IsVertical,
+                "Horizontal / Vertical override the orientation");
+
+            // End to end with a kernel: de-squeezing the upright image vertically == de-squeezing the stored sideways
+            // image horizontally and then turning it upright.
+            {
+                var stored = new PixelImage(90, 60, 3, 8);
+                rnd.NextBytes(stored.Data8);
+                stored.Metadata.Exif = TestExif(true, 6, true);
+                var up = ImageIO.MakeUpright(stored);
+                int worst = 0;
+                bool dims = true;
+                foreach (var share in new[] { 0.0, 0.5, 1.0 })
+                {
+                    var k = new DesqueezeSettings { Factor = 1.5, WidthShare = share, Widen = WidenMethod.Kernel, Algorithm = ResampleAlgorithm.Lanczos3 };
+                    var viaUpright = Desqueezer.Process(up, k);                         // Auto -> vertical
+                    k.Direction = SqueezeDirection.Horizontal;
+                    stored.Metadata.SourceOrientation = 0;
+                    var viaStored = Orientation.Apply(Desqueezer.Process(stored, k), 6);
+                    if (viaUpright.Width != viaStored.Width || viaUpright.Height != viaStored.Height) { dims = false; continue; }
+                    for (int i = 0; i < viaUpright.Data8.Length; i++) worst = Math.Max(worst, Math.Abs(viaUpright.Data8[i] - viaStored.Data8[i]));
+                }
+                Check(dims && worst == 0, "kernel, 3 splits: vertical de-squeeze of the upright shot = horizontal de-squeeze of the sideways file, turned (max diff " + worst + ")");
+
+                // Without a tag (portrait-shaped, or forced Vertical) the image is turned clockwise and back.
+                var portrait = new PixelImage(60, 90, 3, 8);
+                rnd.NextBytes(portrait.Data8);
+                var k2 = new DesqueezeSettings { Factor = 1.5, WidthShare = 0.5, Widen = WidenMethod.Kernel, Algorithm = ResampleAlgorithm.Lanczos3 };
+                var a1 = Desqueezer.Process(portrait, k2);
+                k2.Direction = SqueezeDirection.Horizontal;
+                var a2 = Orientation.Apply(Desqueezer.Process(Orientation.Apply(portrait, 6), k2), 8);
+                Check(a1.Width == 49 && a1.Height == 110 && Equal(a1.Data8, a2.Data8),
+                    "untagged portrait: turned, de-squeezed horizontally, turned back (60x90 -> " + a1.Width + "x" + a1.Height + ")");
+            }
         }
 
         private static void AxisSRTests(string modelPath)
@@ -429,13 +662,34 @@ namespace DesqueezeBench
                 foreach (var share in new[] { 0.0, 0.5, 1.0 })
                     foreach (var axis in new[] { SqueezeAxis.Horizontal, SqueezeAxis.Vertical })
                     {
-                        var s = new DesqueezeSettings { Factor = 1.5, WidthShare = share, Widen = WidenMethod.Detail, Axis = axis };
+                        var s = new DesqueezeSettings
+                        {
+                            Factor = 1.5, WidthShare = share, Widen = WidenMethod.Detail,
+                            Direction = axis == SqueezeAxis.Horizontal ? SqueezeDirection.Horizontal : SqueezeDirection.Vertical,
+                        };
                         var g = DesqueezeGeometry.Compute(120, 80, 1.5, share, axis);
                         var r = Desqueezer.Process(src, s);
                         bool learned = Desqueezer.UsesLearned(120, 80, g.OutputWidth, g.OutputHeight, s);
                         Check(r.Width == g.OutputWidth && r.Height == g.OutputHeight && learned == (share > 0),
                             "Process " + axis + " share " + share + " -> " + r.Width + "x" + r.Height + (learned ? " (learned)" : " (kernel)"));
                     }
+                // A shot taken with the camera turned (orientation 6): Detail on the upright image == Detail on the
+                // sideways file, rotated afterwards.
+                var stored = new PixelImage(96, 64, 3, 8);
+                rnd.NextBytes(stored.Data8);
+                stored.Metadata.Exif = TestExif(true, 6, true);
+                var up = ImageIO.MakeUpright(stored);
+                bool same = true;
+                foreach (var share in new[] { 0.5, 1.0 })
+                {
+                    var sd = new DesqueezeSettings { Factor = 1.6, WidthShare = share, Widen = WidenMethod.Detail };
+                    var viaUp = Desqueezer.Process(up, sd);
+                    sd.Direction = SqueezeDirection.Horizontal;
+                    var viaStored = Orientation.Apply(Desqueezer.Process(stored, sd), 6);
+                    same &= viaUp.Width == viaStored.Width && viaUp.Height == viaStored.Height && Equal(viaUp.Data8, viaStored.Data8);
+                }
+                Check(same, "Detail: camera-turned shot (tag 6) = sideways file de-squeezed horizontally, then rotated (bit-exact)");
+
                 Desqueeze.Core.Resampling.AxisSRModel.Default = null;
                 var k = Desqueezer.Process(src, new DesqueezeSettings { Factor = 1.5, WidthShare = 1, Widen = WidenMethod.Detail });
                 Check(k.Width == 180 && k.Height == 80, "no model loaded -> kernel fallback");

@@ -205,12 +205,20 @@ namespace Desqueeze.Core.Imaging
         /// <summary>PNG ancillary chunks carried through when writing PNG (sRGB, gAMA, cHRM, pHYs, text).</summary>
         public List<PngChunk> PngChunks = new List<PngChunk>();
 
+        /// <summary>
+        /// The EXIF orientation (1-8) the source file was tagged with, or 0 if it had none. Set by
+        /// <see cref="Codecs.ImageIO.MakeUpright"/>, which turns the pixels upright and resets the tag in
+        /// <see cref="Exif"/> to 1; this field remembers how the camera was held.
+        /// </summary>
+        public int SourceOrientation;
+
         public ImageMetadata Clone()
         {
             var m = new ImageMetadata
             {
                 IccProfile = IccProfile != null ? (byte[])IccProfile.Clone() : null,
                 Exif = Exif != null ? (byte[])Exif.Clone() : null,
+                SourceOrientation = SourceOrientation,
             };
             if (PngChunks != null)
                 foreach (var c in PngChunks)

@@ -42,7 +42,7 @@ namespace Desqueeze.Core
         Sigmoidal = 2,
     }
 
-    /// <summary>Which axis the lens squeezed. Horizontal for ordinary anamorphic lenses.</summary>
+    /// <summary>The axis of the (upright) image that the lens squeezed. See <see cref="SqueezeDirection"/> for the setting.</summary>
     public enum SqueezeAxis
     {
         Horizontal = 0,
@@ -94,8 +94,10 @@ namespace Desqueeze.Core
         /// </summary>
         public WidenMethod Widen = WidenMethod.Detail;
 
-        /// <summary>Axis the lens squeezed (Vertical is for future vertical-anamorphic support).</summary>
-        public SqueezeAxis Axis = SqueezeAxis.Horizontal;
+        /// <summary>
+        /// Which axis to de-squeeze. Auto follows the camera's orientation for each image (see <see cref="AxisChooser"/>).
+        /// </summary>
+        public SqueezeDirection Direction = SqueezeDirection.Auto;
 
         /// <summary>
         /// Anti-ringing strength for the enlarged axis, 0..1. Clamps each new sample toward the range of its
@@ -123,7 +125,7 @@ namespace Desqueeze.Core
         public override string ToString()
         {
             return "factor " + Factor.ToString("0.###") + ", width share " + WidthShare.ToString("0.###") +
-                   ", " + Algorithm + ", widen " + Widen + (Axis == SqueezeAxis.Vertical ? ", vertical" : "") +
+                   ", " + Algorithm + ", widen " + Widen + ", direction " + Direction +
                    ", reduce " + ReduceLight + ", enlarge " + EnlargeLight +
                    (AntiRinging > 0 ? ", AR " + AntiRinging.ToString("0.##") : "");
         }

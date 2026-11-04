@@ -101,6 +101,80 @@ namespace Desqueeze.Tests
             CollectionAssert.AreEqual(Transforms.Transpose(h).Data8, v.Data8);
         }
 
+        /// <summary>Minimal EXIF block: IFD0 holding one Orientation SHORT, linked to an empty IFD1 (a "thumbnail").</summary>
+        private static byte[] Exif(int orientation)
+        {
+            return new byte[]
+            {
+                (byte)'I', (byte)'I', 42, 0, 8, 0, 0, 0,
+                1, 0, 0x12, 0x01, 3, 0, 1, 0, 0, 0, (byte)orientation, 0, 0, 0,
+                26, 0, 0, 0,
+                0, 0, 0, 0, 0, 0,
+            };
+        }
+
+        [Test]
+        public void Orientation_MatchesExifDefinitions()
+        {
+            // rows "1 2 3" / "4 5 6"
+            var img = new PixelImage(3, 2, 1, new byte[] { 1, 2, 3, 4, 5, 6 });
+            CollectionAssert.AreEqual(new byte[] { 3, 2, 1, 6, 5, 4 }, Orientation.Apply(img, 2).Data8);
+            CollectionAssert.AreEqual(new byte[] { 6, 5, 4, 3, 2, 1 }, Orientation.Apply(img, 3).Data8);
+            CollectionAssert.AreEqual(new byte[] { 4, 5, 6, 1, 2, 3 }, Orientation.Apply(img, 4).Data8);
+            CollectionAssert.AreEqual(new byte[] { 1, 4, 2, 5, 3, 6 }, Orientation.Apply(img, 5).Data8);
+            CollectionAssert.AreEqual(new byte[] { 4, 1, 5, 2, 6, 3 }, Orientation.Apply(img, 6).Data8); // 90° clockwise
+            CollectionAssert.AreEqual(new byte[] { 6, 3, 5, 2, 4, 1 }, Orientation.Apply(img, 7).Data8);
+            CollectionAssert.AreEqual(new byte[] { 3, 6, 2, 5, 1, 4 }, Orientation.Apply(img, 8).Data8); // 90° counter-clockwise
+            for (int o = 1; o <= 8; o++)
+                CollectionAssert.AreEqual(img.Data8, Orientation.Apply(Orientation.Apply(img, o), Orientation.Inverse(o)).Data8, "orientation " + o);
+        }
+
+        [Test]
+        public void Orientation_LoaderTurnsUprightAndResetsTag()
+        {
+            var stored = new PixelImage(60, 40, 3, 8);
+            new System.Random(9).NextBytes(stored.Data8);
+            stored.Metadata.Exif = Exif(6);
+            Assert.AreEqual(6, ExifPatcher.ReadOrientation(JpegInfo.Read(JpegEncoder.Encode(stored)).Exif));
+            var up = ImageIO.MakeUpright(stored);
+            Assert.AreEqual(40, up.Width);
+            Assert.AreEqual(60, up.Height);
+            Assert.AreEqual(6, up.Metadata.SourceOrientation);
+            Assert.AreEqual(1, ExifPatcher.ReadOrientation(up.Metadata.Exif));
+            var saved = JpegInfo.Read(ImageIO.Encode(up, ImageFileFormat.Jpeg));
+            Assert.AreEqual(1, ExifPatcher.ReadOrientation(saved.Exif));
+            Assert.AreEqual(0, saved.Exif[22] | saved.Exif[23] | saved.Exif[24] | saved.Exif[25], "thumbnail link removed");
+        }
+
+        [Test]
+        public void Orientation_AutoDirection()
+        {
+            Assert.IsTrue(AxisChooser.Choose(SqueezeDirection.Auto, 4000, 6000, 6).IsVertical);
+            Assert.IsTrue(AxisChooser.Choose(SqueezeDirection.Auto, 4000, 6000, 8).IsVertical);
+            Assert.IsTrue(AxisChooser.Choose(SqueezeDirection.Auto, 4000, 6000, 0).IsVertical);
+            Assert.IsFalse(AxisChooser.Choose(SqueezeDirection.Auto, 6000, 4000, 1).IsVertical);
+            Assert.IsFalse(AxisChooser.Choose(SqueezeDirection.Auto, 6000, 4000, 0).IsVertical);
+            Assert.IsFalse(AxisChooser.Choose(SqueezeDirection.Horizontal, 4000, 6000, 6).IsVertical);
+            Assert.IsTrue(AxisChooser.Choose(SqueezeDirection.Vertical, 6000, 4000, 1).IsVertical);
+        }
+
+        [Test]
+        public void Orientation_TurnedShotDesqueezesLikeTheStoredOne()
+        {
+            var stored = new PixelImage(90, 60, 3, 8);
+            new System.Random(11).NextBytes(stored.Data8);
+            stored.Metadata.Exif = Exif(6);
+            var up = ImageIO.MakeUpright(stored);
+            var s = new DesqueezeSettings { Factor = 1.5, WidthShare = 1, Widen = WidenMethod.Kernel, Algorithm = ResampleAlgorithm.Lanczos3 };
+            var viaUpright = Desqueezer.Process(up, s);                      // Auto: camera was turned -> vertical
+            Assert.AreEqual(60, viaUpright.Width);
+            Assert.AreEqual(135, viaUpright.Height);
+            s.Direction = SqueezeDirection.Horizontal;
+            var viaStored = Orientation.Apply(Desqueezer.Process(stored, s), 6);
+            // The internal turn undoes the camera's turn, so the resampler sees exactly the sideways pixels.
+            CollectionAssert.AreEqual(viaStored.Data8, viaUpright.Data8);
+        }
+
         [Test]
         public void Jpeg_EncoderOutputDecodesInUnity()
         {

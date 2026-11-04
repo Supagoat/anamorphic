@@ -57,8 +57,11 @@ namespace Desqueeze.App
         public string defaultAlgorithm = "MagicKernelSharp2021";
         /// <summary>How the stretched axis is enlarged: "Detail", "DetailFast" or "Kernel".</summary>
         public string widenMethod = "Detail";
-        /// <summary>Axis the lens squeezed: "Horizontal" (normal anamorphic) or "Vertical".</summary>
-        public string squeezeAxis = "Horizontal";
+        /// <summary>
+        /// Default squeeze direction: "Auto" (follow the camera's orientation: shots taken with the camera turned 90°
+        /// are de-squeezed vertically), "Horizontal" or "Vertical". Can be changed in the app.
+        /// </summary>
+        public string squeezeAxis = "Auto";
 
         /// <summary>Light space when shrinking an axis: "Gamma", "Linear" or "Sigmoidal".</summary>
         public string reduceLight = "Gamma";
@@ -165,7 +168,7 @@ namespace Desqueeze.App
                 WidthShare = defaultWidthShare,
                 Algorithm = DefaultAlgorithm,
                 Widen = ParseEnum(widenMethod, WidenMethod.Detail),
-                Axis = ParseEnum(squeezeAxis, SqueezeAxis.Horizontal),
+                Direction = ParseEnum(squeezeAxis, SqueezeDirection.Auto),
                 ReduceLight = ParseLight(reduceLight, LightSpace.Gamma),
                 EnlargeLight = ParseLight(enlargeLight, LightSpace.Sigmoidal),
                 AntiRinging = antiRinging,

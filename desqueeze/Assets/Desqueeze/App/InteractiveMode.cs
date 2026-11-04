@@ -48,7 +48,7 @@ namespace Desqueeze.App
         {
             return Math.Abs(a.Factor - b.Factor) < 1e-12 && Math.Abs(a.WidthShare - b.WidthShare) < 1e-12 &&
                    a.Algorithm == b.Algorithm && a.ReduceLight == b.ReduceLight && a.EnlargeLight == b.EnlargeLight &&
-                   a.Widen == b.Widen && a.Axis == b.Axis &&
+                   a.Widen == b.Widen && a.Direction == b.Direction &&
                    Math.Abs(a.AntiRinging - b.AntiRinging) < 1e-6f;
         }
 
@@ -262,7 +262,9 @@ namespace Desqueeze.App
                 _lastSaved = null;
                 _viewer.Show(_originalLayer, false);
                 Prefs.SetString("OpenDir", Path.GetDirectoryName(path));
-                _app.ShowInfo("Opened " + Path.GetFileName(path) + " (" + img.Describe() + ")");
+                int o = img.Metadata != null ? img.Metadata.SourceOrientation : 0;
+                _app.ShowInfo("Opened " + Path.GetFileName(path) + " (" + img.Describe() + ")" +
+                              (o > Orientation.Normal ? " - " + Orientation.Describe(o) + " as the camera's orientation tag asks" : ""));
                 GC.Collect();
             }
             catch (Exception e)
@@ -307,10 +309,13 @@ namespace Desqueeze.App
                 _viewer.Show(_resultLayer, true);
                 if (previous != null) previous.Dispose();
                 bool learned = Desqueezer.UsesLearned(src.Width, src.Height, result.Width, result.Height, settings);
+                bool vertical = AxisChooser.Choose(settings.Direction, src).IsVertical;
+                bool other = vertical ? result.Width != src.Width : result.Height != src.Height;
                 string how = learned
                     ? (settings.Widen == WidenMethod.Detail ? "cross-axis detail" : "cross-axis detail, fast") +
-                      (result.Height != src.Height || result.Width < src.Width ? " + " + SettingsPanel.Info(settings.Algorithm).Name : "")
+                      (other ? " + " + SettingsPanel.Info(settings.Algorithm).Name : "")
                     : SettingsPanel.Info(settings.Algorithm).Name;
+                if (vertical) how = "vertical, " + how;
                 _app.ShowInfo("De-squeezed to " + result.Width + " x " + result.Height + " in " +
                               sw.Elapsed.TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture) + " s (" + how + ")");
                 GC.Collect();

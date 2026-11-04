@@ -232,14 +232,8 @@ namespace Desqueeze.App
             _settingsScroll = GUILayout.BeginScrollView(_settingsScroll, false, false, GUIStyle.none, GUI.skin.verticalScrollbar, GUILayout.ExpandHeight(true));
             bool busy = _mode == Mode.Interactive ? _interactive.Busy : _batch.Busy;
             GUI.enabled = !busy;
-            int w = 0, h = 0;
-            var img = _interactive.Original;
-            if (_mode == Mode.Interactive && img != null)
-            {
-                w = img.Width;
-                h = img.Height;
-            }
-            if (_panel.Draw(Settings, _ui, w, h)) Prefs.SaveSettings(Settings);
+            var img = _mode == Mode.Interactive ? _interactive.Original : null;
+            if (_panel.Draw(Settings, _ui, img)) Prefs.SaveSettings(Settings);
             GUI.enabled = true;
             CaptureTooltip();
             GUILayout.EndScrollView();

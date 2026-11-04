@@ -9,10 +9,12 @@ using UnityEngine;
 namespace Desqueeze.App.IO
 {
     /// <summary>
-    /// Loads JPEG and PNG files into a <see cref="PixelImage"/>.
+    /// Loads JPEG and PNG files into an upright <see cref="PixelImage"/>.
     /// PNG uses the core decoder (16-bit preserved) on a worker thread. JPEG pixels are decoded with
     /// Unity's ImageConversion, which must run on the main thread, so <see cref="LoadAsync"/> must be
     /// awaited from the main thread. EXIF and ICC data are kept for writing back out.
+    /// Images are turned upright from their EXIF orientation tag (Unity's decoder ignores it), the tag is
+    /// reset to 1, and the original value is kept in Metadata.SourceOrientation for the squeeze-direction choice.
     /// </summary>
     internal static class ImageLoader
     {
@@ -26,7 +28,7 @@ namespace Desqueeze.App.IO
         {
             var format = ImageIO.DetectFormat(bytes);
             if (format == ImageFileFormat.Png)
-                return await Task.Run(() => PngCodec.Decode(bytes), ct);
+                return await Task.Run(() => ImageIO.MakeUpright(PngCodec.Decode(bytes)), ct);
 
             if (format == ImageFileFormat.Jpeg)
             {
@@ -40,7 +42,10 @@ namespace Desqueeze.App.IO
                 int w, h;
                 Color32[] px = DecodeJpegOnMainThread(bytes, out w, out h);
                 ct.ThrowIfCancellationRequested();
-                return await Task.Run(() => FromColor32(px, w, h, info), ct);
+                // Unity's decoder does not apply the orientation tag. Should a future version do so, the decoded size
+                // comes back with width and height exchanged relative to the frame header; then only the tag is reset.
+                bool decoderTurned = info.Width != info.Height && w == info.Height && h == info.Width;
+                return await Task.Run(() => ImageIO.MakeUpright(FromColor32(px, w, h, info), decoderTurned), ct);
             }
             throw new InvalidDataException("Not a JPEG or PNG file.");
         }

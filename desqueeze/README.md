@@ -59,6 +59,11 @@ Hidden files and macOS `._` resource forks are ignored.
 **Anamorphic factor.** Preset buttons come from the config file (1.33x, 1.5x, 1.6x; default
 1.5x), plus **Custom** for any value in the configured range.
 
+**Squeeze direction.** **Auto** (default), **Horizontal** or **Vertical**. Auto follows the camera:
+a shot taken with the camera turned 90° is de-squeezed vertically, everything else horizontally (see
+[Camera orientation](#camera-orientation-portrait-shots)). The line under the buttons says what Auto
+decided for the open image and why. Horizontal and Vertical override it for every image.
+
 **Height / width split (one slider).** Any output whose aspect is *factor x source aspect* is a
 correct de-squeeze. The slider chooses how much comes from widening versus shortening, and is locked so
 `widthScale / heightScale = factor` always holds:
@@ -75,6 +80,10 @@ t = 1    Width only    width x factor,     height x1          (keeps every captu
 The panel shows both scale factors and, with an image open, the exact output size, aspect and
 megapixels. Rounding to whole pixels changes the aspect by less than 0.05%.
 
+For a vertical squeeze the roles swap: the slider runs from **Width only** (narrow the width) to
+**Height only** (stretch the height, keeping every captured column). The right end adds resolution in
+both directions, and one slider position serves both.
+
 **Widening.** How the stretched axis is enlarged:
 
 * **Detail** (default): cross-axis detail reconstruction (described below). It rebuilds horizontal
@@ -89,6 +98,49 @@ the other axis is then shortened with the selected kernel.
 **Resampling.** Algorithm list, plus **Advanced**: the light space used for the shrinking axis and
 for the enlarging axis, and optional anti-ringing for the enlarged axis. With **Detail**, the kernel
 is only used for shortening.
+
+---
+
+## Camera orientation (portrait shots)
+
+An anamorphic lens squeezes along the sensor's long side. Turn the camera 90° for a portrait shot and
+the lens turns with it, so in the upright picture the squeeze runs **vertically**.
+
+**What the camera records.** Cameras (and phones) store the sensor's pixels as read out, still sideways,
+and write how the camera was held into the EXIF orientation tag: 6 or 8 for a quarter turn. Viewers
+read the tag and show the picture upright. Unity's JPEG decoder ignores the tag.
+
+**What the app does.**
+
+1. **On load**, the image is turned upright from its tag (JPEG APP1 or PNG eXIf, all eight EXIF
+   orientations), and the tag is reset to 1 so the metadata matches the pixels. The viewer shows the
+   picture the way the camera meant it.
+2. **Auto** picks the axis:
+   * tag 5-8 (camera turned 90°): vertical;
+   * no tag, or a "level" tag, but the image is taller than wide: vertical. Software that rotates the
+     pixels itself usually resets the tag, and a sensor is never taller than wide;
+   * anything else: horizontal.
+3. **De-squeezing vertically** turns the image a quarter turn, runs exactly the horizontal pipeline
+   (Detail, Detail fast or Kernel, the slider, the light spaces), and turns the result back. When the
+   tag says how the camera was turned, the internal turn undoes exactly that turn, so the resampler
+   works on the sensor's own pixels. The result is bit-identical to de-squeezing the sideways file and
+   rotating it afterwards.
+4. **On save**, the output is written upright with orientation 1. The EXIF thumbnail link is removed:
+   the embedded thumbnail is a small copy of the squeezed capture, which would show the wrong shape.
+
+**Turning by rotation vs. by transposing.** A quarter turn can be a true 90° rotation, or a transpose
+(rows become columns, which is a rotation plus a mirror). On 198 held-out cases (22 photos x 1.33/1.5/1.6x x
+three camera conditions, squeezed vertically), Detail scored the same either way. Clockwise rotation was
++0.01 dB, counter-clockwise −0.00 dB, against transposing. The model was trained on mirrored images,
+so the mirror makes no difference. The app rotates.
+
+**Checked against real files.**
+* The 18 test JPEGs of [exif-orientation-examples](https://github.com/recurser/exif-orientation-examples)
+  (every orientation, landscape and portrait) come out pixel-identical to Pillow's `exif_transpose`.
+* EXIF blocks from 53 real camera and phone files in [exif-samples](https://github.com/ianare/exif-samples):
+  * 52 read the same orientation as Pillow. The 53rd has no orientation tag in its main EXIF directory, and
+    the app treats it as untagged.
+  * After the orientation reset and thumbnail removal, every other tag is unchanged in all 53.
 
 ---
 
@@ -175,8 +227,8 @@ For every output pixel, at input position *u*: column *j0* = floor(*u*), phase =
    local regression slope against luma, as a guided filter [3] does, so colour edges stay aligned at a
    third of the cost. Flat areas (window standard deviation < 0.02) skip the network.
 4. **Shortening, if any.** When the slider also shortens the other axis, the widened image is kept at 16 bits and
-   then shortened with the selected kernel. A vertical squeeze is transposed, widened, and
-   transposed back.
+   then shortened with the selected kernel. A vertical squeeze is turned a quarter turn, de-squeezed
+   horizontally, and turned back (see [Camera orientation](#camera-orientation-portrait-shots)).
 
 ### Results
 
@@ -283,8 +335,9 @@ in the editor is slower than .NET 8, and an IL2CPP build is faster.
   sources aren't rounded to 8-bit first), and Huffman tables optimised per image. On test images it
   measured about 0.3 dB higher PSNR than libjpeg-turbo at quality 100 / 4:4:4, usually in a smaller file.
 * **PNG**: lossless, adaptive row filters, parallel DEFLATE. Bit depth, gray/RGB and alpha are preserved.
-* **Metadata**: EXIF (camera, lens, exposure, GPS, orientation) and ICC profiles are carried into
-  the output (also across formats). The EXIF pixel-dimension tags are updated to the new size.
+* **Metadata**: EXIF (camera, lens, exposure, GPS) and ICC profiles are carried into the output (also
+  across formats). The EXIF pixel-dimension tags are updated to the new size. The pixels are saved upright,
+  so the orientation tag is 1, and the stale EXIF thumbnail is unlinked.
 * Resampling is done in float on all cores. Colour is premultiplied by alpha, so transparent pixels don't bleed.
 
 ---
@@ -307,7 +360,7 @@ in the editor is slower than .NET 8, and an IL2CPP build is faster.
     "customFactorMin": 1.0, "customFactorMax": 3.0,
     "defaultWidthShare": 0.5,                         // 1 = width only (keeps every captured row)
     "widenMethod": "Detail",                          // Detail | DetailFast | Kernel
-    "squeezeAxis": "Horizontal",                      // Vertical = the lens squeezed the image vertically
+    "squeezeAxis": "Auto",                            // Auto | Horizontal | Vertical (the default direction)
     "defaultAlgorithm": "MagicKernelSharp2021",      // or Lanczos3, Lanczos4, Spline64, EwaLanczosSharp, ...
     "reduceLight": "Gamma",                           // Gamma | Linear | Sigmoidal
     "enlargeLight": "Sigmoidal",
@@ -324,9 +377,6 @@ in the editor is slower than .NET 8, and an IL2CPP build is faster.
 The detail model is `Assets/StreamingAssets/desqueeze-axissr.bin`. If it is missing, the app says so
 and widening falls back to the kernel. `Tools/AxisSR` retrains it.
 
-`squeezeAxis` isn't in the UI yet. With `Vertical`, the slider's "width" side means the stretched
-(vertical) axis, and the detail widener runs on the transposed image.
-
 The app also remembers your last settings and folders. **Advanced > Reset to defaults** returns to
 the config values, and **Desqueeze > Forget Remembered Settings** in the editor clears them.
 
@@ -337,12 +387,12 @@ the config values, and **Desqueeze > Forget Remembered Settings** in the editor 
 ```
 Assets/Desqueeze/
   Core/                 Desqueeze.Core  - pure C# (.NET Standard 2.1), no Unity references
-    Geometry/           DesqueezeGeometry (the split maths), DesqueezeSettings
+    Geometry/           DesqueezeGeometry (the split maths), DesqueezeSettings, AxisChooser (Auto direction)
     Resampling/         kernels, axis weights, separable + EWA resamplers, light-space conversion,
                         AxisSR (the cross-axis detail widener and its model loader)
     Color/              sRGB tables, sigmoidal curve
-    Codecs/             PNG reader/writer, max-quality JPEG encoder, JPEG marker reader, EXIF patcher
-    Imaging/            PixelImage (8/16-bit, 1-4 channels), display reductions, transpose
+    Codecs/             PNG reader/writer, max-quality JPEG encoder, JPEG marker reader, EXIF reader/patcher
+    Imaging/            PixelImage (8/16-bit, 1-4 channels), display reductions, EXIF orientations, transpose
     Batch/              folder scanning and output naming
     Desqueezer.cs       entry point: Desqueezer.Process(image, settings, progress, cancel)
   App/                  Desqueeze.App   - Unity layer: IMGUI UI, viewer, dialogs, modes
@@ -382,6 +432,6 @@ tensor lookup, a 42-tap filter fetched from a table, and a 45-32-24-1 network. T
   size is limited by the GPU's maximum texture size (16384 on most Macs). PNG has no such limits.
 * Colour is assumed to use the sRGB transfer curve for linear and sigmoidal processing. ICC profiles
   are preserved but not converted.
-* The viewer shows pixels as stored and ignores the EXIF orientation flag. The de-squeeze is applied
-  to the stored pixels (the sensor's axis, which is the anamorphic axis) and the orientation flag is
-  kept, so viewers rotate the output correctly.
+* **Auto** falls back to the image's shape when a file has no orientation tag. A landscape shot cropped
+  to a portrait shape before de-squeezing would be taken as vertical; choose **Horizontal** for those.
+  Orientation stored only in XMP (not EXIF) is not read.

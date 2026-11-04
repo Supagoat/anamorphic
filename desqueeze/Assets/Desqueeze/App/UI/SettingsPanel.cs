@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using Desqueeze.Core;
+using Desqueeze.Core.Imaging;
 using UnityEngine;
 
 namespace Desqueeze.App.UI
@@ -59,6 +60,16 @@ namespace Desqueeze.App.UI
             "Classic interpolation with the kernel selected below.",
         };
 
+        private static readonly SqueezeDirection[] DirectionValues = { SqueezeDirection.Auto, SqueezeDirection.Horizontal, SqueezeDirection.Vertical };
+        private static readonly string[] DirectionNames = { "Auto", "Horizontal", "Vertical" };
+        private static readonly string[] DirectionTips =
+        {
+            "Follow the camera: shots taken with the camera turned 90° (orientation tag) are de-squeezed vertically, " +
+            "as are portrait-shaped images whose pixels were already rotated. Everything else horizontally.",
+            "Always de-squeeze across the width of the image as it is shown.",
+            "Always de-squeeze along the height of the image as it is shown.",
+        };
+
         private static readonly string[] LightNames = { "Linear", "Gamma", "Sigmoidal" };
         private static readonly LightSpace[] LightValues = { LightSpace.Linear, LightSpace.Gamma, LightSpace.Sigmoidal };
 
@@ -96,8 +107,11 @@ namespace Desqueeze.App.UI
             _customTextValue = factor;
         }
 
-        /// <summary>Draws the controls (GUILayout). Returns true if any setting changed.</summary>
-        public bool Draw(DesqueezeSettings s, UiStyles ui, int imageWidth, int imageHeight)
+        /// <summary>
+        /// Draws the controls (GUILayout). Returns true if any setting changed.
+        /// <paramref name="image"/> is the open (upright) image in interactive mode, or null.
+        /// </summary>
+        public bool Draw(DesqueezeSettings s, UiStyles ui, PixelImage image)
         {
             bool changed = false;
 
@@ -178,8 +192,33 @@ namespace Desqueeze.App.UI
                                 _cfg.customFactorMax.ToString("0.##", CultureInfo.InvariantCulture) + " (set in the config file)", ui.MutedSmall);
             }
 
+            // ---------------------------------------------------------------- direction
+            GUILayout.Label("SQUEEZE DIRECTION", ui.Section);
+            GUILayout.BeginHorizontal();
+            for (int i = 0; i < DirectionValues.Length; i++)
+            {
+                var d = DirectionValues[i];
+                bool sel = s.Direction == d;
+                if (GUILayout.Button(new GUIContent(DirectionNames[i], DirectionTips[i]), sel ? ui.ButtonSelected : ui.Button) && !sel)
+                {
+                    s.Direction = d;
+                    changed = true;
+                }
+            }
+            GUILayout.EndHorizontal();
+            var choice = AxisChooser.Choose(s.Direction, image);
+            bool vertical = choice.IsVertical;
+            if (image != null)
+                GUILayout.Label("This image: " + (vertical ? "vertical" : "horizontal") + " - " + choice.Reason, ui.MutedSmall);
+            else if (s.Direction == SqueezeDirection.Auto)
+                GUILayout.Label("Decided for each image from the camera's orientation.", ui.MutedSmall);
+            else
+                GUILayout.Label("Every image is de-squeezed " + (vertical ? "vertically." : "horizontally."), ui.MutedSmall);
+
             // ---------------------------------------------------------------- split
-            GUILayout.Label("HEIGHT / WIDTH SPLIT", ui.Section);
+            // The slider is the share of the correction that comes from stretching the squeezed axis; its right end
+            // adds resolution in either direction. Labels follow the axis of the open image (horizontal if none).
+            GUILayout.Label(vertical ? "WIDTH / HEIGHT SPLIT" : "HEIGHT / WIDTH SPLIT", ui.Section);
             float share = GUILayout.HorizontalSlider((float)s.WidthShare, 0f, 1f, ui.Slider, ui.Thumb, GUILayout.ExpandWidth(true));
             if (Math.Abs(share - s.WidthShare) > 1e-6)
             {
@@ -189,19 +228,30 @@ namespace Desqueeze.App.UI
                 changed = true;
             }
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Shorten height", ui.MutedSmall);
+            GUILayout.Label(vertical ? "Narrow width" : "Shorten height", ui.MutedSmall);
             GUILayout.FlexibleSpace();
-            GUILayout.Label("Widen width", ui.MutedSmall);
+            GUILayout.Label(vertical ? "Stretch height" : "Widen width", ui.MutedSmall);
             GUILayout.EndHorizontal();
 
             GUILayout.BeginHorizontal();
-            changed |= SnapButton(s, ui, 0.0, "Height only", "Width x1: only the height is reduced (no upsampling)");
-            changed |= SnapButton(s, ui, 0.5, "Balanced", "Keeps the total pixel count the same");
-            changed |= SnapButton(s, ui, 1.0, "Width only", "Height x1: keeps every captured row; only the width is enlarged");
+            if (vertical)
+            {
+                changed |= SnapButton(s, ui, 0.0, "Width only", "Height x1: only the width is reduced (no upsampling)");
+                changed |= SnapButton(s, ui, 0.5, "Balanced", "Keeps the total pixel count the same");
+                changed |= SnapButton(s, ui, 1.0, "Height only", "Width x1: keeps every captured column; only the height is enlarged");
+            }
+            else
+            {
+                changed |= SnapButton(s, ui, 0.0, "Height only", "Width x1: only the height is reduced (no upsampling)");
+                changed |= SnapButton(s, ui, 0.5, "Balanced", "Keeps the total pixel count the same");
+                changed |= SnapButton(s, ui, 1.0, "Width only", "Height x1: keeps every captured row; only the width is enlarged");
+            }
             GUILayout.EndHorizontal();
 
-            double sx = DesqueezeGeometry.WidthScaleFor(s.Factor, s.WidthShare);
-            double sy = DesqueezeGeometry.HeightScaleFor(s.Factor, s.WidthShare);
+            double grow = DesqueezeGeometry.WidthScaleFor(s.Factor, s.WidthShare);
+            double shrink = DesqueezeGeometry.HeightScaleFor(s.Factor, s.WidthShare);
+            double sx = vertical ? shrink : grow;
+            double sy = vertical ? grow : shrink;
             GUILayout.BeginHorizontal();
             GUILayout.Label("Width", ui.Label);
             GUILayout.Label("x" + sx.ToString("0.000", CultureInfo.InvariantCulture), ui.Value);
@@ -210,11 +260,12 @@ namespace Desqueeze.App.UI
             GUILayout.Label("x" + sy.ToString("0.000", CultureInfo.InvariantCulture), ui.Value);
             GUILayout.EndHorizontal();
 
-            if (imageWidth > 0 && imageHeight > 0)
+            if (image != null)
             {
+                int imageWidth = image.Width, imageHeight = image.Height;
                 try
                 {
-                    var g = DesqueezeGeometry.Compute(imageWidth, imageHeight, s.Factor, s.WidthShare);
+                    var g = DesqueezeGeometry.Compute(imageWidth, imageHeight, s.Factor, s.WidthShare, choice.Axis);
                     GUILayout.Label(imageWidth + " x " + imageHeight + "  »  " + g.OutputWidth + " x " + g.OutputHeight + " px", ui.Label);
                     GUILayout.Label("Aspect " + g.OutputAspect.ToString("0.000", CultureInfo.InvariantCulture) + " : 1   ·   " +
                                     (g.PixelCountRatio * 100).ToString("0", CultureInfo.InvariantCulture) + "% of the pixels   ·   " +
@@ -227,7 +278,7 @@ namespace Desqueeze.App.UI
             }
 
             // ---------------------------------------------------------------- widening method
-            GUILayout.Label("WIDENING", ui.Section);
+            GUILayout.Label(vertical ? "STRETCHING (HEIGHT)" : "WIDENING", ui.Section);
             bool modelLoaded = Desqueeze.Core.Resampling.AxisSRModel.Default != null;
             GUILayout.BeginHorizontal();
             for (int i = 0; i < WidenNames.Length; i++)
@@ -308,6 +359,7 @@ namespace Desqueeze.App.UI
                         s.EnlargeLight = d.EnlargeLight;
                         s.AntiRinging = d.AntiRinging;
                         s.Widen = d.Widen;
+                        s.Direction = d.Direction;
                         _customMode = _cfg.PresetIndexOf(s.Factor) < 0;
                         SyncCustomText(s.Factor);
                         _onChanged();
