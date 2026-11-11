@@ -164,6 +164,35 @@ namespace Desqueeze.Core.Resampling
             return dst;
         }
 
+        /// <summary>
+        /// Source positions for one row: <paramref name="positions"/>[x] receives the source x (pixel centres at whole
+        /// numbers) that output column x samples on source row <paramref name="row"/>. Positions must increase along the row.
+        /// </summary>
+        public delegate void RowPositions(int row, double[] positions);
+
+        /// <summary>
+        /// Resamples each row at arbitrary, row-dependent positions (a horizontal warp), reconstructing detail as
+        /// <see cref="UpscaleX"/> does. <paramref name="nominalScale"/> is the typical output/input sample ratio, given to
+        /// the network as its scale feature. Used for the horizontal pass of a two-pass lens-distortion correction, which
+        /// thereby happens in the same resampling as the de-squeeze.
+        /// </summary>
+        public static PixelImage ResampleRows(PixelImage src, int outWidth, RowPositions positions, double nominalScale, AxisSRModel model,
+            AxisSROptions options = null, ProgressTracker progress = null, CancellationToken ct = default)
+        {
+            if (src == null) throw new ArgumentNullException(nameof(src));
+            if (model == null) throw new ArgumentNullException(nameof(model));
+            if (positions == null) throw new ArgumentNullException(nameof(positions));
+            options = options ?? new AxisSROptions();
+            int outDepth = options.OutputBitDepth == 0 ? src.BitDepth : options.OutputBitDepth;
+            var dst = new PixelImage(outWidth, src.Height, src.Channels, outDepth)
+            {
+                Metadata = src.Metadata != null ? src.Metadata.Clone() : new ImageMetadata(),
+                SourceFormat = src.SourceFormat,
+            };
+            new Runner(src, dst, model, options, positions, nominalScale).Run(progress, ct);
+            return dst;
+        }
+
         /// <summary>Enlarges along the requested axis (Y is handled by transposing).</summary>
         public static PixelImage Upscale(PixelImage src, int outLength, SqueezeAxis axis, AxisSRModel model, AxisSROptions options = null,
             ProgressTracker progress = null, CancellationToken ct = default)
@@ -193,7 +222,15 @@ namespace Desqueeze.Core.Resampling
             private readonly int[] _p0, _p1;
             private readonly float[] _pf;
             private readonly float _scaleFeature;
+            private readonly RowPositions _rowPositions;
             private const int BandRows = 16;
+
+            public Runner(PixelImage src, PixelImage dst, AxisSRModel m, AxisSROptions o, RowPositions rowPositions, double nominalScale)
+                : this(src, dst, m, o)
+            {
+                _rowPositions = rowPositions;
+                _scaleFeature = (float)((nominalScale - 1.5) * 2.0);
+            }
 
             public Runner(PixelImage src, PixelImage dst, AxisSRModel m, AxisSROptions o)
             {
@@ -239,6 +276,9 @@ namespace Desqueeze.Core.Resampling
 
             private sealed class Workspace
             {
+                public int[] J0, P0, P1;                   // per-row geometry when positions vary by row
+                public float[] Phase, Pf;
+                public double[] Pos;
                 public float[] Luma, Jxx, Jxy, Jyy, Hxx, Hxy, Hyy, Planes, LumaPlane, Filter, Win, X, Y;
                 public int[] RowOff;
                 public float[] Lin;
@@ -277,6 +317,11 @@ namespace Desqueeze.Core.Resampling
                     RowOff = new int[_m.Rows],
                     Lin = new float[_ch],
                 };
+                if (_rowPositions != null)
+                {
+                    ws.J0 = new int[_W]; ws.P0 = new int[_W]; ws.P1 = new int[_W];
+                    ws.Phase = new float[_W]; ws.Pf = new float[_W]; ws.Pos = new double[_W];
+                }
                 if (_m.HasNetwork)
                 {
                     ws.X = new float[_m.Layers[0].In];
@@ -389,14 +434,36 @@ namespace Desqueeze.Core.Resampling
                 float[] F = m.Filters;
                 float[] h = ws.Filter, win = ws.Win;
                 int strideE = NT, strideC = m.E * strideE, strideS = m.C * strideC, strideQ = m.S * strideS, strideP = m.Q * strideQ;
+                int[] J0 = _j0, P0 = _p0, P1 = _p1;
+                float[] PH = _phase, PF = _pf;
                 for (int y = r0; y < r1; y++)
                 {
                     int jo = (y - r0) * w;
                     int py0 = y - r0;                       // first plane row of this sample's window
+                    if (_rowPositions != null)
+                    {
+                        _rowPositions(y, ws.Pos);
+                        for (int x = 0; x < _W; x++)
+                        {
+                            double c = ws.Pos[x];
+                            if (double.IsNaN(c)) c = -10;
+                            c = Math.Max(-8, Math.Min(w + 7, c));
+                            int j = (int)Math.Floor(c);
+                            double ph = c - j;
+                            ws.J0[x] = j;
+                            ws.Phase[x] = (float)ph;
+                            double pp = ph * m.P - 0.5;
+                            int a = (int)Math.Floor(pp);
+                            ws.Pf[x] = (float)(pp - a);
+                            ws.P1[x] = Clamp(a + 1, 0, m.P - 1);
+                            ws.P0[x] = Clamp(a, 0, m.P - 1);
+                        }
+                        J0 = ws.J0; P0 = ws.P0; P1 = ws.P1; PH = ws.Phase; PF = ws.Pf;
+                    }
                     for (int x = 0; x < _W; x++)
                     {
-                        int j0 = _j0[x];
-                        float f = _phase[x];
+                        int j0 = J0[x];
+                        float f = PH[x];
                         int a = Clamp(j0, 0, w - 1), bb = Clamp(j0 + 1, 0, w - 1);
                         float Jxx = ws.Jxx[jo + a] * (1 - f) + ws.Jxx[jo + bb] * f;
                         float Jxy = ws.Jxy[jo + a] * (1 - f) + ws.Jxy[jo + bb] * f;
@@ -412,8 +479,8 @@ namespace Desqueeze.Core.Resampling
                         int qs = CountBelow(m.StrengthEdges, s1);
                         int qc = CountBelow(m.CoherenceEdges, coh);
                         int baseIdx = qa * strideQ + qs * strideS + qc * strideC;
-                        int i0 = _p0[x] * strideP + baseIdx, i1 = _p1[x] * strideP + baseIdx;
-                        float fr = _pf[x];
+                        int i0 = P0[x] * strideP + baseIdx, i1 = P1[x] * strideP + baseIdx;
+                        float fr = PF[x];
                         for (int t = 0; t < NT; t++) h[t] = F[i0 + t] * (1 - fr) + F[i1 + t] * fr;
 
                         // window row offsets (columns are clamped only near the left/right edges)

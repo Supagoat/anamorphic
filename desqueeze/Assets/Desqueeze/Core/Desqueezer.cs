@@ -182,6 +182,42 @@ namespace Desqueeze.Core
             };
         }
 
+        /// <summary>
+        /// The two-pass warp's settings for these de-squeeze settings, chosen by experiment (see README):
+        /// <list type="bullet">
+        /// <item>Rows: the learned widener whenever the plain de-squeeze would use it (decided on the undistorted geometry).</item>
+        /// <item>A pass whose axis keeps its size only moves pixels by fractions of a pixel: Lanczos 3 in sigmoidal light.</item>
+        /// <item>A pass that shortens or (with Kernel widening) enlarges its axis: the selected kernel and light space, as the
+        /// plain de-squeeze uses them.</item>
+        /// </list>
+        /// </summary>
+        internal static TwoPassOptions TwoPassOptionsFor(PixelImage src, DesqueezeSettings s, DesqueezeGeometry g)
+        {
+            bool learned = UsesLearned(src.Width, src.Height, g.OutputWidth, g.OutputHeight, s);
+            var kernel = Kernels.For(s.Algorithm == ResampleAlgorithm.EwaLanczosSharp ? ResampleAlgorithm.MagicKernelSharp2021 : s.Algorithm);
+            var shift = Kernels.Lanczos(3);
+            var o = new TwoPassOptions
+            {
+                Horizontal = !learned ? WarpPassMethod.Kernel : s.Widen == WidenMethod.Detail ? WarpPassMethod.Detail : WarpPassMethod.DetailFast,
+                Vertical = WarpPassMethod.Kernel,
+                DetailModel = AxisSRModel.Default,
+                OutputBitDepth = src.BitDepth,
+            };
+            if (g.OutputWidth == src.Width) { o.HorizontalKernel = shift; o.HorizontalLight = LightSpace.Sigmoidal; }
+            else { o.HorizontalKernel = kernel; o.HorizontalLight = g.OutputWidth > src.Width ? s.EnlargeLight : s.ReduceLight; }
+            if (g.OutputHeight == src.Height) { o.VerticalKernel = shift; o.VerticalLight = LightSpace.Sigmoidal; }
+            else { o.VerticalKernel = kernel; o.VerticalLight = g.OutputHeight > src.Height ? s.EnlargeLight : s.ReduceLight; }
+            return o;
+        }
+
+        /// <summary>For tests: <see cref="TwoPassOptionsFor"/> with 8-bit output.</summary>
+        public static TwoPassOptions TwoPassOptionsForTest(PixelImage src, DesqueezeSettings s, DesqueezeGeometry g)
+        {
+            var o = TwoPassOptionsFor(src, s, g);
+            o.OutputBitDepth = 8;
+            return o;
+        }
+
         /// <summary>De-squeeze (and distortion correction) of an image whose squeeze runs horizontally.</summary>
         private static PixelImage ProcessSensor(PixelImage src, DesqueezeSettings s, ProgressTracker progress, CancellationToken ct)
         {
@@ -211,11 +247,19 @@ namespace Desqueeze.Core
                 }
                 default:
                 {
-                    // De-squeeze first, so the detail widener sees the lens's own pixels, keeping 16 bits for the warp.
-                    var dq = ResizeTo(src, g.OutputWidth, g.OutputHeight, s, 16, ProgressTracker.Slice(progress, 0f, 0.7f), ct);
-                    ct.ThrowIfCancellationRequested();
-                    result = LensCorrection.Correct(dq, 1.0, model, canvas, ow, oh, DistortionWarpOptions(src, src.BitDepth),
-                        ProgressTracker.Slice(progress, 0.7f, 1f), ct);
+                    if (s.AntiRinging > 0)
+                    {
+                        // Anti-ringing belongs to the separable de-squeeze: de-squeeze (16 bits), then a 2-D warp.
+                        var dq = ResizeTo(src, g.OutputWidth, g.OutputHeight, s, 16, ProgressTracker.Slice(progress, 0f, 0.7f), ct);
+                        ct.ThrowIfCancellationRequested();
+                        result = LensCorrection.Correct(dq, 1.0, model, canvas, ow, oh, DistortionWarpOptions(src, src.BitDepth),
+                            ProgressTracker.Slice(progress, 0.7f, 1f), ct);
+                        break;
+                    }
+                    // De-squeeze and correct together, in two 1-D passes: each row is widened by the detail reconstruction
+                    // exactly at the corrected positions, then each column is resampled once, which also does any
+                    // shortening of the height. See TwoPassWarp and the README for the measurements.
+                    result = TwoPassWarp.Correct(src, s.Factor, model, canvas, ow, oh, TwoPassOptionsFor(src, s, g), progress, ct);
                     break;
                 }
             }

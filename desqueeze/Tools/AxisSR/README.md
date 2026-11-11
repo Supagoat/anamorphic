@@ -54,3 +54,9 @@ scan grain. Any sharp photos work for training: to use your own, replace `list_i
   top of that file.
 
 To check a model with the C# core: `Tools/Bench` → `axissr in.png out.png <outWidth> model.bin [net 0|1] [flatSkip] [X|Y]`.
+
+## Experiment: a sub-pixel shift model
+
+`train_shift.py` trains the same architecture to move fully sampled rows by fractions of a pixel (scale 0.94-1.08),
+for the column pass of the two-pass lens-distortion correction. It takes about 2 minutes. It did not beat Lanczos 3
+(see the main README, "Second round"), so the app does not use it. `SHIFT_CLEAN=1` trains it on clean captures only.

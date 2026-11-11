@@ -43,6 +43,7 @@ namespace DesqueezeBench
                     case "lens-exp": return LensExperimentCmd(args);
                     case "lens-profile": return LensProfileCmd(args);
                     case "lens-apply": return LensApplyCmd(args);
+                    case "warp2": return Warp2Cmd(args);
                     case "exif-patch": return ExifPatchCmd(args);
                     default:
                         Console.WriteLine("unknown command " + args[0]);
@@ -272,38 +273,107 @@ namespace DesqueezeBench
                 var times = new List<string>();
                 var sw = Stopwatch.StartNew();
 
-                Func<LightSpace, Desqueeze.Core.Resampling.WarpKernel, double, Desqueeze.Core.Resampling.WarpOptions> wr = (l, k, r) =>
-                    new Desqueeze.Core.Resampling.WarpOptions { Light = l, Kernel = k, Radius = r, OutputBitDepth = 8 };
-                var tensor = wo(LightSpace.Gamma, Desqueeze.Core.Resampling.WarpKernel.TensorLanczos);
-                var T = Desqueeze.Core.Resampling.WarpKernel.TensorLanczos;
-
-                // B: de-squeeze first, then correct
-                var dqD = Desqueezer.ResizeTo(s16, ow, oh, detail, 16);
-                var dqK = Desqueezer.ResizeTo(s16, ow, oh, kernel, 16);
-                times.Add("desqueeze " + sw.ElapsedMilliseconds); sw.Restart();
-                save("B_detail_tensor", Desqueeze.Core.Lens.LensCorrection.Correct(dqD, 1, model, frame, ow, oh, tensor));
-                times.Add("warp " + sw.ElapsedMilliseconds); sw.Restart();
-                save("B_detail_radial", Desqueeze.Core.Lens.LensCorrection.Correct(dqD, 1, model, frame, ow, oh, radial));
-                times.Add("radial " + sw.ElapsedMilliseconds); sw.Restart();
-                save("B_kernel_tensor", Desqueeze.Core.Lens.LensCorrection.Correct(dqK, 1, model, frame, ow, oh, tensor));
-                save("B_detail_tensor_sigmoid", Desqueeze.Core.Lens.LensCorrection.Correct(dqD, 1, model, frame, ow, oh, wr(LightSpace.Sigmoidal, T, 3)));
-                save("B_detail_tensor_linear", Desqueeze.Core.Lens.LensCorrection.Correct(dqD, 1, model, frame, ow, oh, wr(LightSpace.Linear, T, 3)));
-                save("B_detail_tensor2", Desqueeze.Core.Lens.LensCorrection.Correct(dqD, 1, model, frame, ow, oh, wr(LightSpace.Gamma, T, 2)));
-                save("B_detail_tensor4", Desqueeze.Core.Lens.LensCorrection.Correct(dqD, 1, model, frame, ow, oh, wr(LightSpace.Gamma, T, 4)));
-                save("B_detail_bicubic", Desqueeze.Core.Lens.LensCorrection.Correct(dqD, 1, model, frame, ow, oh, wo(LightSpace.Gamma, Desqueeze.Core.Resampling.WarpKernel.Bicubic)));
-                // A: correct the squeezed image, then de-squeeze
-                var und = Desqueeze.Core.Lens.LensCorrection.Correct(s16, sq, model, frame, sensor.Width, sensor.Height,
-                    new Desqueeze.Core.Resampling.WarpOptions { Kernel = T, OutputBitDepth = 16 });
-                save("A_detail_tensor", To8(Desqueezer.Resize(und, ow, oh, detail)));
-                save("A_kernel_tensor", To8(Desqueezer.Resize(und, ow, oh, kernel)));
-                // C: one resampling, squeezed capture -> corrected output
-                save("C_tensor", Desqueeze.Core.Lens.LensCorrection.Correct(s16, sq, model, frame, ow, oh, tensor));
-                // no correction (what the lens did); with zero distortion this is the de-squeeze alone
-                save("none_detail", To8(dqD));
-                save("none_kernel", To8(dqK));
+                var only = Environment.GetEnvironmentVariable("LENS_METHODS");
+                Func<string, bool> want = n => string.IsNullOrEmpty(only) || Array.IndexOf(only.Split(','), n) >= 0;
+                var tensor = wo(LightSpace.Sigmoidal, Desqueeze.Core.Resampling.WarpKernel.TensorLanczos);
+                var axm = Desqueeze.Core.Resampling.AxisSRModel.Default;
+                string shiftPath = Environment.GetEnvironmentVariable("LENS_SHIFT_MODEL");
+                var shm = !string.IsNullOrEmpty(shiftPath) ? Desqueeze.Core.Resampling.AxisSRModel.Load(shiftPath) : null;
+                string tag = Environment.GetEnvironmentVariable("LENS_TAG") ?? "";
+                Func<Desqueeze.Core.Lens.WarpPassMethod, Desqueeze.Core.Lens.WarpPassMethod, PixelImage> two = (h, v) =>
+                    Desqueeze.Core.Lens.TwoPassWarp.Correct(s16, sq, model, frame, ow, oh, h, v, axm, null, 8);
+                Func<Desqueeze.Core.Lens.WarpPassMethod, Desqueeze.Core.Lens.WarpPassMethod, PixelImage> twoShift = (h, v) =>
+                    Desqueeze.Core.Lens.TwoPassWarp.Correct(s16, sq, model, frame, ow, oh, h, v, axm, shm, 8);
+                var D = Desqueeze.Core.Lens.WarpPassMethod.Detail;
+                var DF = Desqueeze.Core.Lens.WarpPassMethod.DetailFast;
+                var K = Desqueeze.Core.Lens.WarpPassMethod.Kernel;
+                PixelImage dqD = null;
+                if (want("B_detail_tensor"))
+                {
+                    dqD = Desqueezer.ResizeTo(s16, ow, oh, detail, 16);
+                    times.Add("desqueeze " + sw.ElapsedMilliseconds); sw.Restart();
+                    save("B_detail_tensor", Desqueeze.Core.Lens.LensCorrection.Correct(dqD, 1, model, frame, ow, oh, tensor));
+                    times.Add("warp " + sw.ElapsedMilliseconds); sw.Restart();
+                }
+                if (want("F_detail_kernel")) { save("F_detail_kernel" + tag, Desqueeze.Core.Lens.TwoPassWarp.Correct(s16, sq, model, frame, ow, oh, VOpts(axm), null)); times.Add("F_dk " + sw.ElapsedMilliseconds); sw.Restart(); }
+                if (want("F_detail_detail")) { save("F_detail_detail", two(D, D)); times.Add("F_dd " + sw.ElapsedMilliseconds); sw.Restart(); }
+                if (want("F_detail_fast")) save("F_detail_fast", two(D, DF));
+                if (want("F_fast_kernel")) save("F_fast_kernel", two(DF, K));
+                if (want("F_kernel_kernel")) save("F_kernel_kernel", two(K, K));
+                if (shm != null && want("F_detail_shift")) { save("F_detail_shift" + tag, twoShift(D, D)); times.Add("F_ds " + sw.ElapsedMilliseconds); sw.Restart(); }
+                if (shm != null && want("F_detail_shiftfast")) save("F_detail_shiftfast" + tag, twoShift(D, DF));
+                if (want("B05") || want("F05") || want("none05"))
+                {
+                    var g05 = DesqueezeGeometry.Compute(sensor.Width, sensor.Height, sq, 0.5);
+                    int ow2 = g05.OutputWidth, oh2 = g05.OutputHeight;
+                    var detail05 = new DesqueezeSettings { Factor = sq, WidthShare = 0.5, Widen = WidenMethod.Detail };
+                    if (want("B05") || want("none05"))
+                    {
+                        var dq05 = Desqueezer.ResizeTo(s16, ow2, oh2, detail05, 16);
+                        if (want("none05")) save("none05", To8(dq05));
+                        if (want("B05")) save("B05", Desqueeze.Core.Lens.LensCorrection.Correct(dq05, 1, model, frame, ow2, oh2, tensor));
+                    }
+                    if (want("F05")) save("F05" + tag, Desqueeze.Core.Lens.TwoPassWarp.Correct(s16, sq, model, frame, ow2, oh2, VOpts(axm), null));
+                }
+                if (want("Pnew") || want("Pold"))
+                {
+                    // the app's pipeline for a given split and widening (LENS_SHARE, LENS_WIDEN): new (two-pass) and old (de-squeeze + 2-D warp)
+                    double share = double.Parse(Environment.GetEnvironmentVariable("LENS_SHARE") ?? "1", CultureInfo.InvariantCulture);
+                    var wm = (WidenMethod)Enum.Parse(typeof(WidenMethod), Environment.GetEnvironmentVariable("LENS_WIDEN") ?? "Detail");
+                    var ps = new DesqueezeSettings { Factor = sq, WidthShare = share, Widen = wm, Distortion = model, DistortionEdges = Desqueeze.Core.Lens.DistortionEdges.Uncropped };
+                    var gs = DesqueezeGeometry.Compute(sensor.Width, sensor.Height, sq, share);
+                    if (want("Pnew"))
+                    {
+                        var po = Desqueezer.TwoPassOptionsForTest(s16, ps, gs);
+                        string hk = Environment.GetEnvironmentVariable("LENS_HKERNEL"), hl = Environment.GetEnvironmentVariable("LENS_HLIGHT");
+                        if (hk == "lanczos3") po.HorizontalKernel = Desqueeze.Core.Resampling.Kernels.Lanczos(3);
+                        if (hk == "catrom") po.HorizontalKernel = Desqueeze.Core.Resampling.Kernels.CatmullRom;
+                        if (!string.IsNullOrEmpty(hl)) po.HorizontalLight = (LightSpace)Enum.Parse(typeof(LightSpace), hl);
+                        var r = model.IsIdentity ? Desqueezer.Resize(s16, gs.OutputWidth, gs.OutputHeight, ps)
+                            : Desqueeze.Core.Lens.TwoPassWarp.Correct(s16, sq, model, frame, gs.OutputWidth, gs.OutputHeight, po, null);
+                        save("Pnew" + tag, To8(r));
+                    }
+                    if (want("Pold"))
+                    {
+                        var dq = Desqueezer.ResizeTo(s16, gs.OutputWidth, gs.OutputHeight, ps, 16);
+                        save("Pold" + tag, model.IsIdentity ? To8(dq) : Desqueeze.Core.Lens.LensCorrection.Correct(dq, 1, model, frame, gs.OutputWidth, gs.OutputHeight, tensor));
+                    }
+                }
+                if (want("P3"))
+                {
+                    // share LENS_SHARE without enough widening for the learned method: widen rows (learned, at the corrected
+                    // positions) to an intermediate width, correct the columns, then reduce the width with the kernel.
+                    double share = double.Parse(Environment.GetEnvironmentVariable("LENS_SHARE") ?? "0", CultureInfo.InvariantCulture);
+                    double iscale = double.Parse(Environment.GetEnvironmentVariable("LENS_ISCALE") ?? "0", CultureInfo.InvariantCulture);
+                    var ps = new DesqueezeSettings { Factor = sq, WidthShare = share, Widen = WidenMethod.Detail };
+                    var gs = DesqueezeGeometry.Compute(sensor.Width, sensor.Height, sq, share);
+                    int wi = iscale > 0 ? (int)Math.Round(sensor.Width * iscale) : DesqueezeGeometry.Compute(sensor.Width, sensor.Height, sq, 1).OutputWidth;
+                    var o3 = Desqueezer.TwoPassOptionsForTest(s16, ps, gs);
+                    o3.Horizontal = Desqueeze.Core.Lens.WarpPassMethod.Detail;
+                    o3.OutputBitDepth = 16;
+                    var mid = Desqueeze.Core.Lens.TwoPassWarp.Correct(s16, sq, model, frame, wi, gs.OutputHeight, o3, null);
+                    var red = Desqueezer.ResizeTo(mid, gs.OutputWidth, gs.OutputHeight, new DesqueezeSettings { Factor = sq, Widen = WidenMethod.Kernel }, 8);
+                    save("P3" + tag, red);
+                }
+                if (want("C_tensor")) save("C_tensor", Desqueeze.Core.Lens.LensCorrection.Correct(s16, sq, model, frame, ow, oh, tensor));
                 Console.WriteLine(Path.GetFileName(prefix) + ": " + string.Join(", ", times) + " ms");
             }
             return 0;
+        }
+
+        /// <summary>Two-pass options for experiments: LENS_VKERNEL (lanczos3|mks|spline36|catrom|lanczos4), LENS_VLIGHT (Gamma|Sigmoidal|Linear).</summary>
+        private static Desqueeze.Core.Lens.TwoPassOptions VOpts(Desqueeze.Core.Resampling.AxisSRModel axm)
+        {
+            string k = Environment.GetEnvironmentVariable("LENS_VKERNEL") ?? "lanczos3";
+            string l = Environment.GetEnvironmentVariable("LENS_VLIGHT") ?? "Sigmoidal";
+            var kern = k == "mks" ? Desqueeze.Core.Resampling.Kernels.MagicKernelSharp2021 : k == "spline36" ? Desqueeze.Core.Resampling.Kernels.Spline36
+                : k == "catrom" ? Desqueeze.Core.Resampling.Kernels.CatmullRom : k == "lanczos4" ? Desqueeze.Core.Resampling.Kernels.Lanczos(4)
+                : Desqueeze.Core.Resampling.Kernels.Lanczos(3);
+            return new Desqueeze.Core.Lens.TwoPassOptions
+            {
+                Horizontal = Desqueeze.Core.Lens.WarpPassMethod.Detail, Vertical = Desqueeze.Core.Lens.WarpPassMethod.Kernel,
+                VerticalKernel = kern, VerticalLight = (LightSpace)Enum.Parse(typeof(LightSpace), l), DetailModel = axm, OutputBitDepth = 8,
+            };
         }
 
         private static PixelImage To16(PixelImage img)
@@ -357,13 +427,38 @@ namespace DesqueezeBench
             return 0;
         }
 
+        // warp2 <in.png> <out.png> <kx1> <ky1> <kx2> <ky2> <H:Kernel|Detail> <V:Kernel|Detail|Shift> <detail.bin> [shift.bin]
+        // Corrects an already de-squeezed image (squeeze 1) on the full frame with the two-pass warp.
+        private static int Warp2Cmd(string[] a)
+        {
+            var img = PngCodec.Decode(File.ReadAllBytes(a[1]));
+            var m = new Desqueeze.Core.Lens.DistortionModel();
+            m.Kx[0] = double.Parse(a[3], CultureInfo.InvariantCulture); m.Ky[0] = double.Parse(a[4], CultureInfo.InvariantCulture);
+            m.Kx[1] = double.Parse(a[5], CultureInfo.InvariantCulture); m.Ky[1] = double.Parse(a[6], CultureInfo.InvariantCulture);
+            var detail = Desqueeze.Core.Resampling.AxisSRModel.Load(a[9]);
+            var shift = a.Length > 10 ? Desqueeze.Core.Resampling.AxisSRModel.Load(a[10]) : null;
+            Func<string, Desqueeze.Core.Lens.WarpPassMethod> pm = t => t == "Kernel" ? Desqueeze.Core.Lens.WarpPassMethod.Kernel
+                : t == "Fast" || t == "ShiftFast" ? Desqueeze.Core.Lens.WarpPassMethod.DetailFast : Desqueeze.Core.Lens.WarpPassMethod.Detail;
+            double hh = (double)img.Height / img.Width;
+            var frame = new Desqueeze.Core.Lens.CanvasRect(-1, -hh, 1, hh);
+            PixelImage r;
+            if (a[7] == "2D")
+                r = Desqueeze.Core.Lens.LensCorrection.Correct(img, 1, m, frame, img.Width, img.Height, Desqueezer.DistortionWarpOptions(img, 8));
+            else
+                r = Desqueeze.Core.Lens.TwoPassWarp.Correct(img, 1, m, frame, img.Width, img.Height, pm(a[7]), pm(a[8]), detail,
+                    a[8] == "Shift" || a[8] == "ShiftFast" ? shift : null, 8);
+            File.WriteAllBytes(a[2], PngCodec.Encode(r));
+            return 0;
+        }
+
         // lens-apply <in.png> <out.png|jpg> <profile.json> <model.bin> [amount] [AutoCrop|Uncropped] [After|Before|Single]: the app's pipeline with a profile.
         private static int LensApplyCmd(string[] a)
         {
             Desqueeze.Core.Resampling.AxisSRModel.Default = Desqueeze.Core.Resampling.AxisSRModel.Load(a[4]);
             var img = ImageIO.MakeUpright(PngCodec.Decode(File.ReadAllBytes(a[1])));
             var prof = Desqueeze.Core.Lens.LensProfileJson.Read(File.ReadAllText(a[3]));
-            var s = new DesqueezeSettings { Factor = prof.squeezeFactor, WidthShare = 1, Distortion = prof.Distortion };
+            var s = new DesqueezeSettings { Factor = prof.squeezeFactor, Distortion = prof.Distortion,
+                WidthShare = double.Parse(Environment.GetEnvironmentVariable("LENS_SHARE") ?? "1", CultureInfo.InvariantCulture) };
             if (a.Length > 5) s.DistortionAmount = double.Parse(a[5], CultureInfo.InvariantCulture);
             if (a.Length > 6) s.DistortionEdges = (Desqueeze.Core.Lens.DistortionEdges)Enum.Parse(typeof(Desqueeze.Core.Lens.DistortionEdges), a[6], true);
             if (a.Length > 7) s.DistortionOrder = a[7].StartsWith("B", StringComparison.OrdinalIgnoreCase) ? Desqueeze.Core.Lens.DistortionOrder.BeforeDesqueeze
@@ -652,6 +747,7 @@ namespace DesqueezeBench
 
             string modelPath = Path.Combine("Assets", "StreamingAssets", "desqueeze-axissr.bin");
             if (File.Exists(modelPath)) AxisSRTests(modelPath);
+            if (File.Exists(modelPath)) TwoPassTests(modelPath);
             else Console.WriteLine("(skipping cross-axis detail tests: run from the project root so " + modelPath + " is found)");
 
             Console.WriteLine(s_fail == 0 ? "ALL PASSED" : s_fail + " FAILED");
@@ -1221,6 +1317,58 @@ namespace DesqueezeBench
                       Desqueeze.Core.Lens.DistortionSummary.Classify(new Desqueeze.Core.Lens.DistortionModel(), hh) == Desqueeze.Core.Lens.DistortionType.None,
                     "distortion described as barrel / pincushion: " + Desqueeze.Core.Lens.DistortionSummary.Describe(Model(-0.03, -0.03), hh));
             }
+        }
+
+        private static void TwoPassTests(string modelPath)
+        {
+            Console.WriteLine("Two-pass lens correction");
+            var model = Desqueeze.Core.Resampling.AxisSRModel.Load(modelPath);
+            var img = Pattern(90, 60, 3, 8, 21);
+            // the learned widener at per-row positions equal to the uniform de-squeeze geometry = the plain widener
+            var a = Desqueeze.Core.Resampling.AxisSR.UpscaleX(img, 135, model, new Desqueeze.Core.Resampling.AxisSROptions { OutputBitDepth = 16 });
+            var b = Desqueeze.Core.Resampling.AxisSR.ResampleRows(img, 135, (row, pos) => { for (int x = 0; x < pos.Length; x++) pos[x] = (x + 0.5) * 90.0 / 135 - 0.5; },
+                135.0 / 90, model, new Desqueeze.Core.Resampling.AxisSROptions { OutputBitDepth = 16 });
+            Check(Equal(a.Data16, b.Data16), "widener at explicit per-row positions = the plain widener (bit-exact)");
+
+            // flat field through an auto-cropped two-pass correction, 8 and 16 bit, with and without alpha
+            bool flat = true;
+            foreach (var ch in new[] { 3, 4 })
+                foreach (var depth in new[] { 8, 16 })
+                {
+                    var f = new PixelImage(120, 80, ch, depth);
+                    for (int i = 0; i < f.Width * f.Height * ch; i++)
+                    {
+                        bool al = ch == 4 && i % 4 == 3;
+                        if (depth == 8) f.Data8[i] = al ? (byte)255 : (byte)118; else f.Data16[i] = al ? (ushort)65535 : (ushort)30000;
+                    }
+                    var m = Model(-0.06, -0.03, 0.01, 0.005);
+                    double hh = 80.0 / (120 * 1.5);
+                    var crop = Desqueeze.Core.Lens.LensCorrection.Canvas(m, hh, Desqueeze.Core.Lens.DistortionEdges.AutoCrop);
+                    int ow, oh;
+                    Desqueeze.Core.Lens.LensCorrection.CanvasSize(crop, 90, 90, out ow, out oh);
+                    foreach (var hm in new[] { Desqueeze.Core.Lens.WarpPassMethod.Kernel, Desqueeze.Core.Lens.WarpPassMethod.Detail })
+                    {
+                        var o = Desqueeze.Core.Lens.TwoPassWarp.Correct(f, 1.5, m, crop, ow, oh, new Desqueeze.Core.Lens.TwoPassOptions { Horizontal = hm, DetailModel = model });
+                        for (int i = 0; i < o.Width * o.Height * ch; i++)
+                        {
+                            bool al = ch == 4 && i % 4 == 3;
+                            int v = depth == 8 ? o.Data8[i] : o.Data16[i], want = depth == 8 ? (al ? 255 : 118) : (al ? 65535 : 30000);
+                            // the pixel where the crop touches the photo's edge is 99.99% covered: allow 0.01%
+                            if (Math.Abs(v - want) > (depth == 8 ? 1 : 8)) { flat = false; break; }
+                        }
+                    }
+                }
+            Check(flat, "flat field stays flat through the two-pass correction (RGB/RGBA, 8/16-bit, learned and kernel rows)");
+
+            // two-pass and 2-D warp agree on a smooth image, and both straighten what the lens bent
+            var smooth = Pattern(300, 200, 3, 16, 4);
+            var lm = Model(-0.05, -0.03);
+            double h2 = 200.0 / 300;
+            var fr = new Desqueeze.Core.Lens.CanvasRect(-1, -h2, 1, h2);
+            var w2 = Desqueeze.Core.Lens.LensCorrection.Correct(smooth, 1, lm, fr, 300, 200, Desqueezer.DistortionWarpOptions(smooth, 16));
+            var tp = Desqueeze.Core.Lens.TwoPassWarp.Correct(smooth, 1, lm, fr, 300, 200, new Desqueeze.Core.Lens.TwoPassOptions { Horizontal = Desqueeze.Core.Lens.WarpPassMethod.Kernel, OutputBitDepth = 16 });
+            double p = Psnr8(w2, tp, 12);
+            Check(p > 50, "two-pass and 2-D warp agree on a smooth image (" + p.ToString("0.0") + " dB)");
         }
 
         private static double Srgb8(double linear)

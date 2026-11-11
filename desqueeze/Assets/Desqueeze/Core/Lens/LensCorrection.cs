@@ -17,7 +17,10 @@ namespace Desqueeze.Core.Lens
     /// <summary>Where distortion correction happens relative to the de-squeeze.</summary>
     public enum DistortionOrder
     {
-        /// <summary>De-squeeze first (keeping the captured pixels for the detail widener), then correct the de-squeezed image.</summary>
+        /// <summary>
+        /// De-squeeze and correct together in two 1-D passes (<see cref="TwoPassWarp"/>): each row is widened by the detail
+        /// reconstruction at the corrected positions, then each column is resampled once, which also shortens the height.
+        /// </summary>
         AfterDesqueeze = 0,
         /// <summary>Correct the squeezed image, then de-squeeze it.</summary>
         BeforeDesqueeze = 1,

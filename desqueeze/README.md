@@ -197,7 +197,8 @@ The **DISTORTION CORRECTION** section of the panel appears when the profile has 
   lens is sharpest. A barrel-corrected, auto-cropped image therefore comes out slightly larger than a plain
   de-squeeze (12281 x 5319 instead of 12246 x 5304 for the example profile), and no detail at the centre is
   thrown away.
-* **Advanced > Distortion correction order** chooses when the correction happens; see below.
+* **Advanced > Distortion correction order** chooses when the correction happens: **Together** with the de-squeeze
+  (the default, see below), **Before** it, or in **One pass** from the capture.
 
 ### How it works
 
@@ -232,7 +233,20 @@ yd = yu (1 + ky1 r² + ky2 r⁴ + ky3 r⁶),     r² = xu² + yu²
 On synthetic lines with 0.25 px of noise, the fit recovers barrel, pincushion and anamorphic lenses to within
 0.1-0.7 px everywhere in a 9000-px-wide frame.
 
-**The warp** follows the structure of Fisheye Friend's CPU renderer:
+**The correction happens inside the de-squeeze**, as two 1-D passes (a separable warp, after Catmull and Smith):
+1. **Rows.** Each row of the capture is widened by the Detail reconstruction. It samples exactly where the corrected
+   image needs it: where each output column crosses that sensor row.
+2. **Columns.** Each column is resampled once, to the corrected vertical positions. When the split also shortens
+   the height, this pass does that too, so the height is resampled only once.
+
+How each pass resamples:
+* A pass that only moves pixels by fractions of a pixel (its axis keeps its size) uses Lanczos 3 in sigmoidal light.
+* A pass that shortens, or widens with the **Kernel** method, uses the selected kernel and light spaces, as the plain
+  de-squeeze does.
+* With no distortion the result is identical to the plain de-squeeze, bit for bit.
+
+**The 2-D warp** is used for the **Before** and **One pass** orders, and when anti-ringing is on. It follows the
+structure of Fisheye Friend's CPU renderer:
 * Each output pixel is mapped back through the lens to the photo, and nearby source pixels are combined with
   normalised Lanczos-3 weights.
 * Colour is premultiplied by alpha and edges are clamped.
@@ -246,8 +260,8 @@ It differs in three ways:
 * **The footprint widens where the correction shrinks the image**, following the local Jacobian, so pincushion
   corrections don't alias. The boundary of the photo is anti-aliased against the background.
 
-The warp runs in sigmoidal light (gamma for images with alpha), reads the de-squeezed image at 16 bits, and is
-multi-threaded. It adds about 17 s to a 65 MP de-squeeze on a 2-core machine, and a few seconds on a modern Mac.
+Both keep 16 bits between passes, and both are multi-threaded. On a 2-core machine, correcting a 42 MP capture adds
+about 2 s at the balanced split and 5 s at width only to the de-squeeze. On a modern Mac it is a fraction of that.
 
 ### Before or after the de-squeeze? What was measured
 
@@ -257,12 +271,12 @@ integration at 4x4 samples per sensor pixel in linear light, then stored as an 8
 * with strong anamorphic distortion (-0.08 / -0.04 with second-order terms);
 * clean, or softened like a real lens (0.4 px blur).
 
-Each pipeline then corrected and de-squeezed back to the frame. PSNR was measured against the scene integrated
-over the output pixels (dB, mean of 4 scenes):
+Each pipeline then corrected and de-squeezed back to the frame, at the **Width only** split. PSNR was measured
+against the scene integrated over the output pixels (dB, mean of 4 scenes):
 
 | Pipeline | Mild, clean | Mild, soft | Strong, clean | Strong, soft |
 |---|---|---|---|---|
-| **De-squeeze (Detail), then correct** (default) | 34.27 | **34.58** | 33.92 | **34.19** |
+| **De-squeeze (Detail), then correct** | 34.27 | **34.58** | 33.92 | **34.19** |
 | Correct, then de-squeeze (Detail) | 33.83 | 34.07 | 33.55 | 33.67 |
 | One pass, capture to output (warp kernel only) | **34.50** | 33.59 | **34.04** | 33.16 |
 | De-squeeze (Kernel), then correct | 34.56 | 33.59 | 34.10 | 33.16 |
@@ -273,8 +287,8 @@ over the output pixels (dB, mean of 4 scenes):
   the lens' own pixel grid. The squeezed axis is also interpolated twice.
 * **One pass** is a single resampling, but it can't use the Detail widener. It is slightly ahead on perfectly crisp
   captures, where the kernel also beats Detail without any distortion (35.18 vs 34.73 dB). On soft captures, which
-  is what real lenses give, it is 1 dB behind. So de-squeezing first is the default, and the others are under
-  **Advanced**.
+  is what real lenses give, it is 1 dB behind. So de-squeezing first is the default (it became the two-pass
+  **Together** order in the second round, below), and the others are under **Advanced**.
 * **The warp kernel matters most.** The radial Lanczos lost 1.6-3.2 dB here, and 2.4-3.9 dB with no distortion at
   all, which is pure blur.
 * The other warp settings made little difference:
@@ -283,6 +297,56 @@ over the output pixels (dB, mean of 4 scenes):
   * Catmull-Rom bicubic: -0.2 to +0.1 dB.
 
   The defaults are separable Lanczos 3 in sigmoidal light.
+
+### Second round: squeezing out more
+
+The same test, used to look for the remaining loss.
+
+**Where the loss is.** The de-squeezed image, compared with a perfect de-squeeze on its own (distorted) grid,
+scored 34.93 dB (mild) and 34.76 dB (strong). After the 2-D warp it scored 34.27 and 33.93. So the warp itself
+cost 0.66-0.83 dB.
+
+**Better linear kernels don't help.** A perfect de-squeezed image, warped with any linear kernel, reaches only 39.5 dB
+(mild) and 38.5 dB (strong). The kernels tried were Lanczos 3, 4, 6 and 8, prefiltered cubic and quintic B-splines
+(cardinal spline interpolation), O-MOMS and Catmull-Rom; all were within about 0.15 dB of each other. Pixels
+integrate the scene over their area, so they are aliased, and no linear interpolator can place them between the
+original rows exactly.
+
+**Resample each axis once.** Horizontally, the de-squeezed image is upsampled from the sensor and smooth, so moving
+it again costs almost nothing. The loss is vertical, and a plain de-squeeze that also shortens the height
+resamples it twice: once to shorten, once to correct. The two-pass correction does both in one (dB, mean of 4
+scenes):
+
+| Split | Pipeline | Mild, clean | Mild, soft | Strong, clean | Strong, soft | No distortion |
+|---|---|---|---|---|---|---|
+| Height only | de-squeeze, then 2-D warp | 36.36 | 36.05 | 35.59 | 35.27 | 42.28 |
+| | **two-pass** | **38.57** | **37.87** | **37.48** | **36.82** | 42.28 |
+| Balanced (default) | de-squeeze, then 2-D warp | 34.35 | 35.13 | 34.05 | 34.73 | 34.67 |
+| | **two-pass** | **34.63** | **35.49** | **34.39** | **35.17** | 34.67 |
+| Width only | de-squeeze, then 2-D warp | 34.28 | 34.61 | 33.94 | 34.22 | 34.72 |
+| | two-pass | 34.27 | 34.61 | 33.93 | 34.21 | 34.72 |
+
+* At the default split that is **+0.28 to +0.44 dB**, and at height only **+1.6 to +2.2 dB**. Width only is unchanged:
+  it never shortens, so there was only one vertical resampling to begin with.
+* With **Kernel** widening, the gain at the balanced split is +0.31 to +0.47 dB.
+* It is also faster: the warp no longer runs as a separate 2-D pass over the whole output.
+* Kernel choice for each pass: when shortening, the de-squeeze's own Magic Kernel Sharp in gamma light. It beat
+  Lanczos, Spline 36 and Catmull-Rom, in sigmoidal light or gamma, by up to 0.1 dB, and matches the plain de-squeeze
+  exactly at zero distortion. When only moving by fractions of a pixel, Lanczos 3 in sigmoidal light, by 0.07-0.18 dB
+  over Magic Kernel Sharp.
+
+**What didn't help:**
+* **A learned sub-pixel shift for the column pass.** This is the Detail model's architecture, trained to move
+  pixel-integrated rows by fractions of a pixel: `Tools/AxisSR/train_shift.py`, 2 minutes to train. It was 0.2-0.3
+  dB *worse* than Lanczos 3, even on a perfect de-squeezed image and even when trained on clean captures. The
+  learned filters can't beat the windowed sinc for pure shifts. The network adds about 0.25-0.45 dB over its own
+  filters, which isn't enough to make up the gap.
+* **The existing Detail model for the column pass:** -1 dB. It was trained for 1.15-2x stretches, not 1x shifts.
+* **Widening, then narrowing back, at height only.** The idea was to let the Detail model rebuild the squeezed rows
+  before the warp. It came out 1.8 dB worse on clean captures than interpolating the captured columns directly.
+* **Iterative back-projection.** This re-simulates the capture from the result and pushes the difference back. It
+  lost 0.5 dB per iteration. The corrected image already reproduces the capture better than the ground truth does
+  (residual 3.31 vs 3.56), so consistency with the capture carries no further information.
 
 ### The lens in the sample photos
 
@@ -645,7 +709,8 @@ Assets/Desqueeze/
     Batch/              folder scanning and output naming
     Calibration/        CircleFinder (finds a squeezed circle), CalibrationPreview (close-up + ring geometry)
     Lens/               DistortionModel, DistortionFit (plumb-line fit), LensCorrection (canvas, crop, warp map),
-                        EdgeSnap, LensProfile + LensProfileJson, DistortionSummary
+                        TwoPassWarp (correction inside the de-squeeze), EdgeSnap, LensProfile + LensProfileJson,
+                        DistortionSummary
     Resampling/WarpResampler.cs   the general warp (separable or radial Lanczos, EWA footprint, AA boundary)
     Desqueezer.cs       entry point: Desqueezer.Process(image, settings, progress, cancel)
   App/                  Desqueeze.App   - Unity layer: IMGUI UI, viewer, dialogs, modes

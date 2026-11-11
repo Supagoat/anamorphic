@@ -72,12 +72,12 @@ namespace Desqueeze.App.UI
 
         private static readonly Desqueeze.Core.Lens.DistortionOrder[] OrderValues =
             { Desqueeze.Core.Lens.DistortionOrder.AfterDesqueeze, Desqueeze.Core.Lens.DistortionOrder.BeforeDesqueeze, Desqueeze.Core.Lens.DistortionOrder.SinglePass };
-        private static readonly string[] OrderNames = { "After", "Before", "One pass" };
+        private static readonly string[] OrderNames = { "Together", "Before", "One pass" };
         private static readonly string[] OrderTips =
         {
-            "De-squeeze first (the detail widener sees the lens' own pixels), then correct the distortion at 16 bits. Measured best.",
-            "Correct the distortion on the squeezed capture, then de-squeeze. Measured about 1.5 dB worse: the widener then sees resampled pixels.",
-            "One resampling straight from the capture to the corrected output, with the warp kernel only (no detail widener).",
+            "Correct while de-squeezing, in two passes: the detail widener rebuilds each row at the corrected positions, then each column is resampled once (also shortening the height). Measured best.",
+            "Correct the distortion on the squeezed capture, then de-squeeze. Measured 0.4-0.5 dB worse: the widener then sees resampled pixels.",
+            "One 2-D resampling straight from the capture to the corrected output, with the warp kernel only (no detail widener).",
         };
 
         private static readonly string[] LightNames = { "Linear", "Gamma", "Sigmoidal" };
@@ -364,7 +364,7 @@ namespace Desqueeze.App.UI
                     changed = true;
                 }
 
-                GUILayout.Label(new GUIContent("Distortion correction order", "When the lens profile corrects distortion. After the de-squeeze measured best."), ui.Label);
+                GUILayout.Label(new GUIContent("Distortion correction order", "When the lens profile corrects distortion. Together with the de-squeeze measured best."), ui.Label);
                 GUILayout.BeginHorizontal();
                 for (int i = 0; i < OrderValues.Length; i++)
                 {
