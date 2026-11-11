@@ -175,6 +175,51 @@ namespace Desqueeze.Tests
             CollectionAssert.AreEqual(viaStored.Data8, viaUpright.Data8);
         }
 
+        /// <summary>A dark disk of radius r squeezed by f horizontally, 8x8 supersampled.</summary>
+        private static PixelImage SqueezedDisk(int w, int h, double cx, double cy, double r, double f)
+        {
+            var img = new PixelImage(w, h, 1, 8);
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++)
+                {
+                    int n = 0;
+                    for (int j = 0; j < 8; j++)
+                        for (int i = 0; i < 8; i++)
+                        {
+                            double u = (x - 0.5 + (i + 0.5) / 8 - cx) * f / r, v = (y - 0.5 + (j + 0.5) / 8 - cy) / r;
+                            if (u * u + v * v <= 1) n++;
+                        }
+                    img.Data8[y * w + x] = (byte)Math.Round(Desqueeze.Core.Color.Srgb.FromLinear(0.8 - 0.78 * n / 64.0) * 255);
+                }
+            return img;
+        }
+
+        [Test]
+        public void Calibration_FindsSqueezedCircle()
+        {
+            var img = SqueezedDisk(400, 300, 201.3, 148.6, 110, 1.6);
+            string err;
+            var fit = Desqueeze.Core.Calibration.CircleFinder.Find(img, 180, 170, out err);
+            Assert.IsNotNull(fit, err);
+            Assert.AreEqual(201.3, fit.CenterX, 0.05);
+            Assert.AreEqual(148.6, fit.CenterY, 0.05);
+            Assert.AreEqual(1.6, fit.MeasuredFactor(SqueezeAxis.Horizontal), 0.0016);
+            Assert.IsNull(Desqueeze.Core.Calibration.CircleFinder.Find(img, 15, 15, out err), "nothing to find in the corner");
+        }
+
+        [Test]
+        public void Calibration_RingMatchesCircleAtTheRightFactor()
+        {
+            var img = SqueezedDisk(400, 300, 201.3, 148.6, 110, 1.6);
+            string err;
+            var fit = Desqueeze.Core.Calibration.CircleFinder.Find(img, 201, 148, out err);
+            var right = Desqueeze.Core.Calibration.CalibrationPreview.Render(img, fit, new DesqueezeSettings { Factor = 1.6, WidthShare = 1 }, SqueezeAxis.Horizontal);
+            Assert.AreEqual(right.RingRadius, right.ImageRadiusX, 0.001 * right.RingRadius);
+            Assert.AreEqual(right.RingRadius, right.ImageRadiusY, 0.001 * right.RingRadius);
+            var wrong = Desqueeze.Core.Calibration.CalibrationPreview.Render(img, fit, new DesqueezeSettings { Factor = 1.5, WidthShare = 1 }, SqueezeAxis.Horizontal);
+            Assert.Less(wrong.ImageRadiusX, 0.95 * wrong.RingRadius);
+        }
+
         [Test]
         public void Jpeg_EncoderOutputDecodesInUnity()
         {

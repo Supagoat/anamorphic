@@ -4,7 +4,9 @@ A Unity (6.3) desktop app that de-squeezes photos shot through anamorphic lenses
 inspect it pixel-perfectly, choose the anamorphic factor and how the correction is split between
 widening and shortening, apply it, and save as maximum-quality JPEG or PNG. Widening uses a
 purpose-built single-axis upscaler that rebuilds detail from the fully sampled axis. Shortening uses a
-benchmarked high-quality kernel. A batch mode does the same for every image in a folder.
+benchmarked high-quality kernel. A batch mode does the same for every image in a folder, and a
+calibration mode finds a lens' exact squeeze factor from a photographed circle and measures its distortion
+from lines that should be straight. Lens profiles keep both, so a lens is set up once and applied with one click.
 
 All image processing lives in a plain C# library (`Assets/Desqueeze/Core`, no Unity references),
 so it can be tested outside Unity and later given a GPU path behind the same API.
@@ -37,6 +39,7 @@ On first load an editor script sets desktop-friendly player settings (windowed, 
 | Toggle original / result | **Original / De-squeezed** buttons or Space. Zoom and the relative position are kept, so you compare the same spot |
 | Apply | **Apply De-squeeze** (Ctrl/Cmd+Enter) - full resolution, on all cores, cancellable |
 | Save | Choose **JPG** or **PNG**, then **Save As…** (Ctrl/Cmd+S). Applies first if the settings changed |
+| Calibrate | **Calibrate** (top right): measure a lens' exact factor from a photographed circle (see [Calibration mode](#calibration-mode)) |
 
 **Pixel-perfect viewing.** Magnification is always a whole number (each image pixel becomes an
 exact N x N block of screen pixels, point-sampled, at whole-pixel offsets). Zooming out uses exact
@@ -51,6 +54,250 @@ and written **in its own format**: JPEG in gives maximum-quality JPEG out, PNG i
 16-bit). Options: include subfolders (mirrors the structure), overwrite existing, file-name suffix.
 The originals can never be overwritten: using the input folder as output requires a suffix.
 Hidden files and macOS `._` resource forks are ignored.
+
+## Calibration mode
+
+**Calibrate** (top right, next to **Config**) has two tools, chosen with the tabs over the image:
+**Squeeze factor** (below) and **Distortion** (see [Distortion correction](#distortion-correction)).
+What either measures goes into the current lens profile.
+
+### Squeeze factor
+
+Finds the exact squeeze factor of a lens. A lens marked "1.5x" can be 1.47x or 1.53x, and the
+difference shows as subtly oval wheels, faces and lens flares.
+
+1. **Shoot a circle** through the lens: straight on, near the middle of the frame, ideally about half the
+   frame height. `Tools/Calibration/calibration-chart.png` is a printable chart (A4, print at 100%). A plate,
+   a CD or a round sign works too. `Tools/Calibration/sample-squeezed-1.6x.jpg` is a simulated 1.6x shot of the
+   chart for trying the mode without a lens.
+2. Open the photo and press **Calibrate** (top right, next to **Config**).
+3. **Click inside the squeezed circle.** Dragging still pans, and scrolling zooms. The app finds the circle's
+   centre and outline to a fraction of a pixel.
+4. The view switches to a **live de-squeezed close-up** of the circle with a **thin red ring**. The ring's
+   inside edge sits just outside the radius the circle really has: its size along the axis the lens didn't
+   squeeze, scaled by the current split.
+5. **Change the factor until the circle exactly fills the ring**, touching its inside all the way round.
+   * Use the factor controls in the panel, the **−0.01 / −0.001 / +0.001 / +0.01** buttons over the image, or the
+     `[` and `]` keys (Shift for 0.01).
+   * The status bar says how far off the circle is ("0.4% too narrow (raise the factor)").
+   * **Measured** shows the factor the circle implies, and **Use** sets it.
+6. **Done** (or Esc) keeps the factor. To reuse it, add it as a preset in the config file.
+
+The close-up is rendered with the selected kernel, so it updates as you drag. Its geometry is exactly that of
+the full de-squeeze.
+
+**How the circle is found.**
+1. Rays are cast from the click. Along each one, edges in the linear-light luminance become candidates.
+2. RANSAC picks the axis-aligned ellipse most rays agree on: one polarity all round, with the click inside it. For
+   a drawn ring outline it takes the outer edge.
+3. The edge is re-measured to a fraction of a pixel on 360 rays from that ellipse's centre, and the ellipse is
+   refitted geometrically, with outliers trimmed.
+
+The ellipse is kept axis-aligned because the lens squeezes along one image axis. A circle that isn't
+facing the camera squarely, or that sits where the lens distorts, fits less well, and the app warns about it.
+
+**Accuracy.** The test set was 320 simulated anamorphic photos:
+* objects: a printed dot, a light plate, a clock face with ticks and hands, and a drawn ring outline;
+* backgrounds: plain paper, or a busy photograph;
+* radii from 35 to 480 px, squeezed by area integration at 1.33-2x;
+* half of them with lens blur, sensor noise and JPEG;
+* each clicked at a random point inside.
+
+Results for radius 90 px and up:
+
+| Case | Error of the measured factor |
+|---|---|
+| Solid shapes on plain paper | median 0.005%, worst 0.18% |
+| Everything shown without a warning | median 0.005%, 95% within 0.08%, worst 0.42% |
+
+* 0.1% is about 0.0015 at 1.5x, close to one step of the factor's third decimal.
+* The simulated chart photo (true 1.6x) measures 1.6004x.
+* Every measurement more than 0.5% off came with a warning: a poor fit, only part of the outline found, a very
+  small circle, or a thin drawn line.
+* The usual failure is a thin line drawn over a busy background, where the finder can lock onto texture inside
+  the ring. If that happens, use **Pick another circle**.
+* Circles under about 40 px radius, and lines only 2-3 px wide, are measured less precisely; the app says so.
+* Finding a circle takes about 0.1-0.3 s.
+
+---
+
+## Lens profiles
+
+A profile holds everything about one lens: its squeeze factor, its distortion, and the calibration lines the
+distortion was measured from (so the measurement can be edited later). The **LENS PROFILE** section at the top of
+the side panel manages them.
+
+* **The drop-down** chooses a profile from the library, or **No profile**. Choosing one sets the factor and turns
+  on its distortion correction. Hovering a profile shows its factor and distortion.
+* **While a profile is active, its factor is the factor in the panel.** Changing either changes both, so a
+  calibrated factor lands in the profile. The **•** after the name means there are changes that aren't saved.
+* **Name** and **Notes** edit the profile. **Save** writes it to the library. **Revert** goes back to the saved
+  version, and **Save copy** saves it as a new profile.
+* **New** starts an empty profile with the current factor. **Import…** copies a profile file into the library and
+  uses it. **Export…** writes the profile anywhere, to share or back up. **Delete** (click twice) removes the file;
+  the profile stays loaded, unsaved, so a mistake can be undone with **Save**.
+* **Open profile folder** (in the drop-down) shows the library: `Documents/Desqueeze Lens Profiles`, one `.json`
+  file per lens. The folder can be changed in the config file.
+* Unsaved changes are kept between sessions, so quitting doesn't lose a calibration in progress.
+* Batch mode uses the active profile, and its header says which one.
+
+Profiles are plain JSON: the factor, the distortion coefficients (`kx`, `ky`) and the calibration points, in pixels of
+the photo as the sensor recorded it. `Tools/LensProfiles` has an example measured from one of the 1.54x sample
+photos.
+
+---
+
+## Distortion correction
+
+Lenses bend straight lines: outwards towards the edges (barrel distortion), inwards (pincushion), or both
+(moustache). Anamorphic lenses can bend horizontal and vertical lines by different amounts. The app measures this
+from a photo and straightens it while de-squeezing.
+
+### Measuring it
+
+1. **Shoot something with straight lines** through the lens: a brick wall, tiles, a building, a printed grid. Fill
+   the frame and include the edges and corners, where distortion is strongest. It doesn't need to be square-on,
+   because straightness doesn't depend on perspective.
+2. Open it and press **Calibrate**, then the **Distortion** tab.
+3. **+ Horizontal** (H) or **+ Vertical** (V) starts a line. **Click points along an edge that is straight in
+   reality**, from one end to the other. 5-10 points spread along it are plenty. **Enter** (or **Finish line**)
+   ends the line.
+4. **Add as many lines as you like.** Long lines near the top, bottom, left and right edges measure the most. A
+   line needs at least 3 points to count.
+5. **Fix points** as needed:
+   * Drag a point to move it, or select it and nudge it with the arrow keys (0.25 px, Shift for 2 px).
+   * **Delete** removes the selected point. **Shift+Delete** (or **Delete line**) removes its line. Clicking a point
+     also continues its line.
+   * **Undo** (Ctrl/Cmd+Z) steps back, and **Clear** (click twice) removes every line.
+   * Dragging the background pans, as usual.
+6. With **Snap** on (the default), each point moves onto the nearest edge to a fraction of a pixel. All of a
+   line's points stay on the same side of a mortar joint or frame.
+
+After every change the distortion is fitted again, which takes about 20-50 ms. The overlay shows:
+* the points: blue for horizontal lines, orange for vertical ones;
+* **green curves** showing where the measured lens puts a straight line through each line's points. When the fit
+  is good, the points sit on them;
+* **red points**, which are well off their line, probably misplaced.
+
+The status bar shows the straightness error before and after correction, the model the data supports, and advice
+when the lines don't reach far enough. **Preview** (P) renders the photo corrected, with straight lines through the
+corrected points.
+
+The result goes into the lens profile (an untitled one is created if there was none). **Save** it there.
+
+### Applying it
+
+The **DISTORTION CORRECTION** section of the panel appears when the profile has a measurement:
+
+* **Amount** is 0-150%. At 100% the lines are straight; less keeps some of the lens' character.
+* **Auto-crop** gives the largest rectangle, of the photo's shape, that the corrected picture fills completely.
+  **Uncropped** keeps every pixel of the photo, and the parts of the frame it no longer reaches are black
+  (transparent in PNGs with alpha). Barrel correction leaves those gaps at the middle of each edge.
+* The corrected size is shown. The output keeps the de-squeezed resolution at the centre of the frame, where the
+  lens is sharpest. A barrel-corrected, auto-cropped image therefore comes out slightly larger than a plain
+  de-squeeze (12281 x 5319 instead of 12246 x 5304 for the example profile), and no detail at the centre is
+  thrown away.
+* **Advanced > Distortion correction order** chooses when the correction happens; see below.
+
+### How it works
+
+**The model.** Coordinates are normalised so that x runs from -1 to 1 across the de-squeezed width, with the same
+units vertically:
+
+```
+xd = xu (1 + kx1 r² + kx2 r⁴ + kx3 r⁶)
+yd = yu (1 + ky1 r² + ky2 r⁴ + ky3 r⁶),     r² = xu² + yu²
+```
+
+* Equal x and y coefficients are the classic radial (Brown-Conrady) model. Separate ones describe anamorphic lenses.
+* The centre is fixed, so its scale is unchanged.
+* The model is mirror-symmetric, so it doesn't matter which way the camera was turned for a portrait shot.
+* Points are measured on the photo as shown and stored in the sensor's own orientation, the frame the de-squeeze
+  works in.
+* Because x is relative to the width, a profile fits any resolution of the same frame.
+
+**The fit** (the plumb-line method):
+1. The coefficients are chosen so that, once corrected, each line's points lie on a straight line: Levenberg-
+   Marquardt on the perpendicular distances to each line's best total-least-squares line.
+2. Huber weighting means one misplaced point barely moves the result. In the tests, a point 25 px off changed the
+   correction by under 1 px.
+3. The model is picked by the data (Bayesian information criterion), from:
+   * radial, 1st order;
+   * radial, 2nd order;
+   * separate horizontal and vertical, 1st order;
+   * separate horizontal and vertical, 2nd order.
+4. A direction only gets its own coefficient when its lines are long and reach towards the edges. Otherwise short
+   lines would extrapolate wildly into the corners, which the first real test did until this check was added.
+
+On synthetic lines with 0.25 px of noise, the fit recovers barrel, pincushion and anamorphic lenses to within
+0.1-0.7 px everywhere in a 9000-px-wide frame.
+
+**The warp** follows the structure of Fisheye Friend's CPU renderer:
+* Each output pixel is mapped back through the lens to the photo, and nearby source pixels are combined with
+  normalised Lanczos-3 weights.
+* Colour is premultiplied by alpha and edges are clamped.
+
+It differs in three ways:
+* **Its half-pixel offset is fixed.** Fisheye Friend measures source distances from `x + 0.5`, which shifts the image
+  by half a pixel.
+* **The Lanczos kernel is separable** (x and y) instead of radial. A radial sinc doesn't vanish at the diagonal
+  neighbours, so it blurs even where nothing moves. It scored 1.6-3.9 dB lower (below). The separable kernel
+  reproduces the image exactly where the correction is zero.
+* **The footprint widens where the correction shrinks the image**, following the local Jacobian, so pincushion
+  corrections don't alias. The boundary of the photo is anti-aliased against the background.
+
+The warp runs in sigmoidal light (gamma for images with alpha), reads the de-squeezed image at 16 bits, and is
+multi-threaded. It adds about 17 s to a 65 MP de-squeeze on a 2-core machine, and a few seconds on a modern Mac.
+
+### Before or after the de-squeeze? What was measured
+
+The 4 sample photos (1.54x) were the scenes. Each was shot through a simulated lens with 1.54x squeeze, by area
+integration at 4x4 samples per sensor pixel in linear light, then stored as an 8-bit capture. This was done:
+* with mild distortion (radial k1 = -0.015, about the lens in the samples);
+* with strong anamorphic distortion (-0.08 / -0.04 with second-order terms);
+* clean, or softened like a real lens (0.4 px blur).
+
+Each pipeline then corrected and de-squeezed back to the frame. PSNR was measured against the scene integrated
+over the output pixels (dB, mean of 4 scenes):
+
+| Pipeline | Mild, clean | Mild, soft | Strong, clean | Strong, soft |
+|---|---|---|---|---|
+| **De-squeeze (Detail), then correct** (default) | 34.27 | **34.58** | 33.92 | **34.19** |
+| Correct, then de-squeeze (Detail) | 33.83 | 34.07 | 33.55 | 33.67 |
+| One pass, capture to output (warp kernel only) | **34.50** | 33.59 | **34.04** | 33.16 |
+| De-squeeze (Kernel), then correct | 34.56 | 33.59 | 34.10 | 33.16 |
+| Correct, then de-squeeze (Kernel) | 34.07 | 33.22 | 33.63 | 32.80 |
+| De-squeeze (Detail), then correct with Fisheye Friend's radial Lanczos | 31.05 | 32.80 | 30.87 | 32.57 |
+
+* **De-squeezing first wins** by 0.4-0.5 dB, whether the Detail widener or the kernel does the de-squeeze. Correcting first resamples the photo before the widener sees it, so the widener no longer works from
+  the lens' own pixel grid. The squeezed axis is also interpolated twice.
+* **One pass** is a single resampling, but it can't use the Detail widener. It is slightly ahead on perfectly crisp
+  captures, where the kernel also beats Detail without any distortion (35.18 vs 34.73 dB). On soft captures, which
+  is what real lenses give, it is 1 dB behind. So de-squeezing first is the default, and the others are under
+  **Advanced**.
+* **The warp kernel matters most.** The radial Lanczos lost 1.6-3.2 dB here, and 2.4-3.9 dB with no distortion at
+  all, which is pure blur.
+* The other warp settings made little difference:
+  * Light space: sigmoidal +0.01-0.03 dB over gamma, linear -0.2 to -0.6 dB.
+  * Radius: 2 lobes -0.2 to +0.1 dB, 4 lobes ±0.02 dB.
+  * Catmull-Rom bicubic: -0.2 to +0.1 dB.
+
+  The defaults are separable Lanczos 3 in sigmoidal light.
+
+### The lens in the sample photos
+
+The distortion was measured on `street_nov11-185.jpg` from 15 straight edges: doors, window frames and signs,
+190 points. Curbs, steps and other edges that aren't really straight were left out.
+
+* **Barrel distortion**, radial k1 = -0.0153: about 1.0% of the width at the edges, roughly 128 px across the
+  12,246-px de-squeezed image.
+* Straightness went from 1.02 to 0.95 px RMS. The edges in the photo are only straight to about a pixel, so that
+  is the floor.
+* The edges were near the middle of the frame, so horizontal and vertical bending couldn't be told apart, and the
+  app says so. A brick wall filling the frame would measure the corners better and show whether this lens bends
+  the two directions differently.
+
+`Tools/LensProfiles/Example 1.54x (street_nov11-185).json` is that measurement; **Import…** it to try it.
 
 ---
 
@@ -368,7 +615,9 @@ in the editor is slower than .NET 8, and an IL2CPP build is faster.
     "defaultSaveFormat": "jpg",
     "batchFileSuffix": "_desqueezed",
     "uiScale": 0,                                     // 0 = automatic (2 on Retina)
-    "maxZoom": 64
+    "maxZoom": 64,
+    "lensProfileFolder": "",                          // "" = Documents/Desqueeze Lens Profiles; ~/ works
+    "distortionEdges": "AutoCrop"                     // AutoCrop | Uncropped (the default after correction)
 }
 ```
 
@@ -394,6 +643,10 @@ Assets/Desqueeze/
     Codecs/             PNG reader/writer, max-quality JPEG encoder, JPEG marker reader, EXIF reader/patcher
     Imaging/            PixelImage (8/16-bit, 1-4 channels), display reductions, EXIF orientations, transpose
     Batch/              folder scanning and output naming
+    Calibration/        CircleFinder (finds a squeezed circle), CalibrationPreview (close-up + ring geometry)
+    Lens/               DistortionModel, DistortionFit (plumb-line fit), LensCorrection (canvas, crop, warp map),
+                        EdgeSnap, LensProfile + LensProfileJson, DistortionSummary
+    Resampling/WarpResampler.cs   the general warp (separable or radial Lanczos, EWA footprint, AA boundary)
     Desqueezer.cs       entry point: Desqueezer.Process(image, settings, progress, cancel)
   App/                  Desqueeze.App   - Unity layer: IMGUI UI, viewer, dialogs, modes
   Editor/               player-settings helper and Desqueeze menu
@@ -403,6 +656,8 @@ Assets/StreamingAssets/desqueeze-axissr.bin   the trained detail model (387 KB)
 Tools/Bench/            command-line harness for the core (dotnet run -- selftest | axissr ...)
 Tools/QualityBenchmark/ the kernel benchmark above
 Tools/AxisSR/           training pipeline for the detail model (see its README)
+Tools/Calibration/      printable calibration chart, a simulated 1.6x photo of it, and the script that makes both
+Tools/LensProfiles/     an example lens profile measured from one of the 1.54x sample photos
 ```
 
 JPEG pixels are decoded by Unity's `ImageConversion` on the main thread. Everything else
@@ -432,6 +687,10 @@ tensor lookup, a 42-tap filter fetched from a table, and a 45-32-24-1 network. T
   size is limited by the GPU's maximum texture size (16384 on most Macs). PNG has no such limits.
 * Colour is assumed to use the sRGB transfer curve for linear and sigmoidal processing. ICC profiles
   are preserved but not converted.
+* The distortion model is radial, with separate horizontal and vertical terms. It has no decentring (tangential)
+  terms, which a tilted or badly assembled lens would need, and assumes the distortion is centred in the frame.
+  Profiles apply to photos of the full frame; a photo cropped before de-squeezing has a different centre.
+* The distortion can only be measured from lines the user places. Automatic line or grid detection isn't there yet.
 * **Auto** falls back to the image's shape when a file has no orientation tag. A landscape shot cropped
   to a portrait shape before de-squeezing would be taken as vertical; choose **Horizontal** for those.
   Orientation stored only in XMP (not EXIF) is not read.

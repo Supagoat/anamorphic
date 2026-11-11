@@ -13,7 +13,7 @@ using UnityEngine;
 namespace Desqueeze.App
 {
     /// <summary>Open one image, inspect it pixel-perfectly, de-squeeze it and save the result.</summary>
-    internal sealed class InteractiveMode : IDisposable
+    internal sealed partial class InteractiveMode : IDisposable
     {
         private readonly DesqueezeApp _app;
         private readonly ImageViewer _viewer = new ImageViewer();
@@ -49,14 +49,25 @@ namespace Desqueeze.App
             return Math.Abs(a.Factor - b.Factor) < 1e-12 && Math.Abs(a.WidthShare - b.WidthShare) < 1e-12 &&
                    a.Algorithm == b.Algorithm && a.ReduceLight == b.ReduceLight && a.EnlargeLight == b.EnlargeLight &&
                    a.Widen == b.Widen && a.Direction == b.Direction &&
-                   Math.Abs(a.AntiRinging - b.AntiRinging) < 1e-6f;
+                   Math.Abs(a.AntiRinging - b.AntiRinging) < 1e-6f && SameDistortion(a, b);
+        }
+
+        private static bool SameDistortion(DesqueezeSettings a, DesqueezeSettings b)
+        {
+            var da = a.ActiveDistortion();
+            var db = b.ActiveDistortion();
+            if (da == null || db == null) return da == null && db == null;
+            if (a.DistortionEdges != b.DistortionEdges || a.DistortionOrder != b.DistortionOrder) return false;
+            for (int i = 0; i < 3; i++)
+                if (da.Kx[i] != db.Kx[i] || da.Ky[i] != db.Ky[i]) return false;
+            return true;
         }
 
         // ============================================================================ main area
 
         public void DrawMain(Rect area, UiStyles ui)
         {
-            float barH = ui.S(42);
+            float barH = _calibrating ? CalibrationBarHeight(ui) : ui.S(42);
             float statusH = ui.S(26);
             var toolbar = new Rect(area.x, area.y, area.width, barH);
             var view = new Rect(area.x, area.y + barH, area.width, area.height - barH - statusH);
@@ -67,10 +78,23 @@ namespace Desqueeze.App
             view = new Rect(Mathf.Round(view.x * ppp) / ppp, Mathf.Round(view.y * ppp) / ppp,
                 Mathf.Round(view.width * ppp) / ppp, Mathf.Round(view.height * ppp) / ppp);
 
+            if (_calibrating && _calTool == CalTool.Squeeze)
+            {
+                UpdateCalibrationPreview();
+                HandleCalibrationClick(view);
+            }
+            else if (_calibrating)
+            {
+                UpdateLineTool();
+                HandleLineInput(view);
+            }
             _viewer.HandleInput(view);
             _viewer.Draw(view, ui);
+            if (_calibrating && _calTool == CalTool.Squeeze) DrawCalibrationRing(view, ui);
+            else if (_calibrating) DrawLineOverlay(view, ui);
             if (_viewer.Layer == null) DrawEmptyHint(view, ui);
-            DrawToolbar(toolbar, ui);
+            if (_calibrating) DrawCalibrationBar(toolbar, ui);
+            else DrawToolbar(toolbar, ui);
             DrawStatus(status, ui);
         }
 
@@ -78,7 +102,11 @@ namespace Desqueeze.App
         {
             var style = new GUIStyle(ui.Label) { alignment = TextAnchor.MiddleCenter, wordWrap = true };
             style.normal.textColor = UiStyles.Muted;
-            GUI.Label(view, "Open a JPEG or PNG shot through an anamorphic lens\n(Open…, or type a path above and press Enter)", style);
+            GUI.Label(view, _calibrating
+                ? (_calTool == CalTool.Distortion
+                    ? "Open a photo of straight lines taken through the lens: a brick wall, a building, a grid\n(Open… above, or Ctrl/Cmd+O)"
+                    : "Open a photo of a circle taken through the lens\n(Open… above, or Ctrl/Cmd+O)")
+                : "Open a JPEG or PNG shot through an anamorphic lens\n(Open…, or type a path above and press Enter)", style);
         }
 
         private void DrawToolbar(Rect r, UiStyles ui)
@@ -129,6 +157,10 @@ namespace Desqueeze.App
             {
                 text = "No image";
             }
+            else if (_calibrating && (_calTool == CalTool.Distortion || _calFit != null))
+            {
+                text = CalibrationStatus();
+            }
             else
             {
                 string which = _showResult && _result != null ? "De-squeezed" : "Original";
@@ -154,6 +186,18 @@ namespace Desqueeze.App
             {
                 ui.ProgressBar(_progress.Value, _busy + "  " + Mathf.RoundToInt(_progress.Value * 100) + "%");
                 if (_cts != null && GUILayout.Button("Cancel", ui.Button)) _cts.Cancel();
+                return;
+            }
+
+            if (_calibrating)
+            {
+                GUILayout.Label(_calTool == CalTool.Distortion
+                    ? "Measuring distortion. Each change is fitted at once and stored in the lens profile above (Save it there). " +
+                      "Amount and Auto-crop above apply it; Preview shows the corrected photo."
+                    : "Calibrating. Change the factor above, or with the buttons over the image, until the circle " +
+                      "exactly fills the red ring. Then press Done and apply the de-squeeze.", ui.MutedSmall);
+                if (GUILayout.Button(new GUIContent("Done", "Leave calibration and keep the factor (Esc)"), ui.Primary))
+                    _app.Defer(StopCalibration);
                 return;
             }
 
@@ -196,8 +240,14 @@ namespace Desqueeze.App
         public void HandleShortcuts(Event e)
         {
             if (e.type != EventType.KeyDown) return;
+            if (HandleCalibrationKeys(e)) return;
             bool cmd = e.command || e.control;
             if (cmd && e.keyCode == KeyCode.O) { if (!Busy) _app.Defer(OpenWithDialog); e.Use(); return; }
+            if (_calibrating && ((e.keyCode == KeyCode.Space && GUIUtility.keyboardControl == 0) || (cmd && (e.keyCode == KeyCode.S || e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter))))
+            {
+                e.Use(); // no Apply / Save / original-result toggle while calibrating
+                return;
+            }
             if (cmd && e.keyCode == KeyCode.S) { if (!Busy && _original != null) _app.Defer(SaveAs); e.Use(); return; }
             if (cmd && (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter)) { if (!Busy && _original != null) _app.Defer(() => Apply(false)); e.Use(); return; }
             if (cmd) return;
@@ -251,6 +301,7 @@ namespace Desqueeze.App
             {
                 var img = await ImageLoader.LoadAsync(path, CancellationToken.None);
                 var layer = await ImageLayer.CreateAsync(img);
+                if (_calibrating) ResetCalibrationForNewImage();
                 DisposeLayers();
                 _original = img;
                 _originalLayer = layer;
@@ -261,6 +312,7 @@ namespace Desqueeze.App
                 _pathField = path;
                 _lastSaved = null;
                 _viewer.Show(_originalLayer, false);
+                if (_calibrating) OnCalibrationImageOpened();
                 Prefs.SetString("OpenDir", Path.GetDirectoryName(path));
                 int o = img.Metadata != null ? img.Metadata.SourceOrientation : 0;
                 _app.ShowInfo("Opened " + Path.GetFileName(path) + " (" + img.Describe() + ")" +
@@ -316,6 +368,9 @@ namespace Desqueeze.App
                       (other ? " + " + SettingsPanel.Info(settings.Algorithm).Name : "")
                     : SettingsPanel.Info(settings.Algorithm).Name;
                 if (vertical) how = "vertical, " + how;
+                if (settings.ActiveDistortion() != null)
+                    how += ", distortion corrected " + (settings.DistortionAmount * 100).ToString("0", CultureInfo.InvariantCulture) + "%" +
+                           (settings.DistortionEdges == Desqueeze.Core.Lens.DistortionEdges.AutoCrop ? ", auto-cropped" : ", uncropped");
                 _app.ShowInfo("De-squeezed to " + result.Width + " x " + result.Height + " in " +
                               sw.Elapsed.TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture) + " s (" + how + ")");
                 GC.Collect();
@@ -399,6 +454,8 @@ namespace Desqueeze.App
         public void Dispose()
         {
             if (_cts != null) _cts.Cancel();
+            DisposeCalibrationLayer();
+            DisposeLinePreviewLayer();
             DisposeLayers();
         }
     }

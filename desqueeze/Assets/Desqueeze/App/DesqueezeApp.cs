@@ -23,9 +23,12 @@ namespace Desqueeze.App
 
         public AppConfig Config { get; private set; }
         public DesqueezeSettings Settings { get; private set; }
+        internal LensProfiles Lenses => _lenses;
 
         private readonly UiStyles _ui = new UiStyles();
         private SettingsPanel _panel;
+        private LensPanel _lensPanel;
+        private LensProfiles _lenses;
         private InteractiveMode _interactive;
         private BatchMode _batch;
         private Mode _mode;
@@ -49,6 +52,7 @@ namespace Desqueeze.App
 
         private void Update()
         {
+            if (_lenses != null) _lenses.Tick();
             int n = _deferred.Count; // actions queued while running wait for the next frame
             for (int i = 0; i < n; i++)
             {
@@ -72,7 +76,10 @@ namespace Desqueeze.App
             string warning;
             Config = AppConfig.Load(out warning);
             Settings = Prefs.LoadSettings(Config.CreateDefaultSettings());
+            _lenses = new LensProfiles(this);
             _panel = new SettingsPanel(Config, Settings, Defer, () => Prefs.SaveSettings(Settings));
+            _lensPanel = new LensPanel(_lenses, Defer, () => Prefs.SaveSettings(Settings), ShowError);
+            _panel.DrawAfterGeometry = (s, ui, img) => _lensPanel.DrawDistortion(s, ui, img);
             _interactive = new InteractiveMode(this);
             _batch = new BatchMode(this);
             _mode = Prefs.GetString("Mode", "Interactive") == "Batch" ? Mode.Batch : Mode.Interactive;
@@ -195,6 +202,9 @@ namespace Desqueeze.App
             if (GUILayout.Button(new GUIContent("Batch", "De-squeeze every image in a folder"), _mode == Mode.Batch ? _ui.TabSelected : _ui.Tab))
                 Defer(() => SetMode(Mode.Batch));
             GUILayout.FlexibleSpace();
+            if (GUILayout.Button(new GUIContent("Calibrate", "Measure your lens: its exact squeeze factor from a photographed circle, and its distortion from lines that should be straight"),
+                    _interactive.Calibrating ? _ui.TabSelected : _ui.Tab))
+                Defer(ToggleCalibration);
             if (GUILayout.Button(new GUIContent("Config", "Open the folder holding " + AppConfig.FileName + " (presets and defaults). Restart the app after editing."), _ui.Tab))
                 Defer(RevealConfig);
             GUILayout.EndHorizontal();
@@ -202,8 +212,25 @@ namespace Desqueeze.App
             GUILayout.EndArea();
         }
 
+        private void ToggleCalibration()
+        {
+            if (_interactive.Calibrating)
+            {
+                _interactive.StopCalibration();
+                return;
+            }
+            if (_interactive.Busy || _batch.Busy)
+            {
+                ShowInfo("Wait for the current job to finish before calibrating.");
+                return;
+            }
+            if (_mode != Mode.Interactive) SetMode(Mode.Interactive);
+            _interactive.StartCalibration();
+        }
+
         private void SetMode(Mode m)
         {
+            if (m != Mode.Interactive && _interactive.Calibrating) _interactive.StopCalibration();
             _mode = m;
             Prefs.SetString("Mode", m.ToString());
             if (m == Mode.Batch) _batch.Plan();
@@ -233,6 +260,7 @@ namespace Desqueeze.App
             bool busy = _mode == Mode.Interactive ? _interactive.Busy : _batch.Busy;
             GUI.enabled = !busy;
             var img = _mode == Mode.Interactive ? _interactive.Original : null;
+            if (_lensPanel.DrawProfile(Settings, _ui)) Prefs.SaveSettings(Settings);
             if (_panel.Draw(Settings, _ui, img)) Prefs.SaveSettings(Settings);
             GUI.enabled = true;
             CaptureTooltip();
@@ -267,6 +295,7 @@ namespace Desqueeze.App
 
         private void OnApplicationQuit()
         {
+            if (_lenses != null) _lenses.Autosave();
             Prefs.SaveSettings(Settings);
             Prefs.Flush();
         }

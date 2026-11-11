@@ -1,6 +1,7 @@
 // Command-line harness for the Unity-independent core (Desqueeze.Core).
 // Used to test codecs and to benchmark resampling quality outside Unity.
 using System;
+using System.Linq;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -37,6 +38,11 @@ namespace DesqueezeBench
                     case "axissr": return AxisSRCmd(args);
                     case "axissr-list": return AxisSRList(args);
                     case "upright": return UprightCmd(args);
+                    case "circle-list": return CircleListCmd(args);
+                    case "distortion-fit": return DistortionFitCmd(args);
+                    case "lens-exp": return LensExperimentCmd(args);
+                    case "lens-profile": return LensProfileCmd(args);
+                    case "lens-apply": return LensApplyCmd(args);
                     case "exif-patch": return ExifPatchCmd(args);
                     default:
                         Console.WriteLine("unknown command " + args[0]);
@@ -235,6 +241,201 @@ namespace DesqueezeBench
             File.WriteAllBytes(a[2] + ".saved.tif",
                 ExifPatcher.WithoutThumbnail(ExifPatcher.WithDimensions(ExifPatcher.WithOrientation(info.Exif, 1), 1234, 567)));
             Console.WriteLine("orientation " + ExifPatcher.ReadOrientation(info.Exif));
+            return 0;
+        }
+
+        // lens-exp <list.txt> <model.bin>: each line "sensor.png outPrefix outW outH kx1 ky1 kx2 ky2".
+        // Corrects the squeezed capture onto the full frame with every pipeline and resampler variant, writing outPrefix_<name>.png.
+        private static int LensExperimentCmd(string[] a)
+        {
+            Desqueeze.Core.Resampling.AxisSRModel.Default = Desqueeze.Core.Resampling.AxisSRModel.Load(a[2]);
+            foreach (var line in File.ReadAllLines(a[1]))
+            {
+                var f = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                if (f.Length < 8) continue;
+                var sensor = PngCodec.Decode(File.ReadAllBytes(f[0]));
+                string prefix = f[1];
+                int ow = int.Parse(f[2]), oh = int.Parse(f[3]);
+                var model = new Desqueeze.Core.Lens.DistortionModel();
+                model.Kx[0] = double.Parse(f[4], CultureInfo.InvariantCulture); model.Ky[0] = double.Parse(f[5], CultureInfo.InvariantCulture);
+                model.Kx[1] = double.Parse(f[6], CultureInfo.InvariantCulture); model.Ky[1] = double.Parse(f[7], CultureInfo.InvariantCulture);
+                double sq = (double)ow / sensor.Width;
+                var frame = new Desqueeze.Core.Lens.CanvasRect(-1, -(double)oh / ow, 1, (double)oh / ow);
+                var s16 = To16(sensor);
+                Action<string, PixelImage> save = (name, img) =>
+                    File.WriteAllBytes(prefix + "_" + name + ".png", PngCodec.Encode(img, new PngEncodeOptions { Compression = System.IO.Compression.CompressionLevel.Fastest }));
+                var detail = new DesqueezeSettings { Factor = sq, WidthShare = 1, Widen = WidenMethod.Detail };
+                var kernel = new DesqueezeSettings { Factor = sq, WidthShare = 1, Widen = WidenMethod.Kernel };
+                Func<LightSpace, Desqueeze.Core.Resampling.WarpKernel, Desqueeze.Core.Resampling.WarpOptions> wo = (l, k) =>
+                    new Desqueeze.Core.Resampling.WarpOptions { Light = l, Kernel = k, OutputBitDepth = 8 };
+                var radial = wo(LightSpace.Gamma, Desqueeze.Core.Resampling.WarpKernel.RadialLanczos);
+                var times = new List<string>();
+                var sw = Stopwatch.StartNew();
+
+                Func<LightSpace, Desqueeze.Core.Resampling.WarpKernel, double, Desqueeze.Core.Resampling.WarpOptions> wr = (l, k, r) =>
+                    new Desqueeze.Core.Resampling.WarpOptions { Light = l, Kernel = k, Radius = r, OutputBitDepth = 8 };
+                var tensor = wo(LightSpace.Gamma, Desqueeze.Core.Resampling.WarpKernel.TensorLanczos);
+                var T = Desqueeze.Core.Resampling.WarpKernel.TensorLanczos;
+
+                // B: de-squeeze first, then correct
+                var dqD = Desqueezer.ResizeTo(s16, ow, oh, detail, 16);
+                var dqK = Desqueezer.ResizeTo(s16, ow, oh, kernel, 16);
+                times.Add("desqueeze " + sw.ElapsedMilliseconds); sw.Restart();
+                save("B_detail_tensor", Desqueeze.Core.Lens.LensCorrection.Correct(dqD, 1, model, frame, ow, oh, tensor));
+                times.Add("warp " + sw.ElapsedMilliseconds); sw.Restart();
+                save("B_detail_radial", Desqueeze.Core.Lens.LensCorrection.Correct(dqD, 1, model, frame, ow, oh, radial));
+                times.Add("radial " + sw.ElapsedMilliseconds); sw.Restart();
+                save("B_kernel_tensor", Desqueeze.Core.Lens.LensCorrection.Correct(dqK, 1, model, frame, ow, oh, tensor));
+                save("B_detail_tensor_sigmoid", Desqueeze.Core.Lens.LensCorrection.Correct(dqD, 1, model, frame, ow, oh, wr(LightSpace.Sigmoidal, T, 3)));
+                save("B_detail_tensor_linear", Desqueeze.Core.Lens.LensCorrection.Correct(dqD, 1, model, frame, ow, oh, wr(LightSpace.Linear, T, 3)));
+                save("B_detail_tensor2", Desqueeze.Core.Lens.LensCorrection.Correct(dqD, 1, model, frame, ow, oh, wr(LightSpace.Gamma, T, 2)));
+                save("B_detail_tensor4", Desqueeze.Core.Lens.LensCorrection.Correct(dqD, 1, model, frame, ow, oh, wr(LightSpace.Gamma, T, 4)));
+                save("B_detail_bicubic", Desqueeze.Core.Lens.LensCorrection.Correct(dqD, 1, model, frame, ow, oh, wo(LightSpace.Gamma, Desqueeze.Core.Resampling.WarpKernel.Bicubic)));
+                // A: correct the squeezed image, then de-squeeze
+                var und = Desqueeze.Core.Lens.LensCorrection.Correct(s16, sq, model, frame, sensor.Width, sensor.Height,
+                    new Desqueeze.Core.Resampling.WarpOptions { Kernel = T, OutputBitDepth = 16 });
+                save("A_detail_tensor", To8(Desqueezer.Resize(und, ow, oh, detail)));
+                save("A_kernel_tensor", To8(Desqueezer.Resize(und, ow, oh, kernel)));
+                // C: one resampling, squeezed capture -> corrected output
+                save("C_tensor", Desqueeze.Core.Lens.LensCorrection.Correct(s16, sq, model, frame, ow, oh, tensor));
+                // no correction (what the lens did); with zero distortion this is the de-squeeze alone
+                save("none_detail", To8(dqD));
+                save("none_kernel", To8(dqK));
+                Console.WriteLine(Path.GetFileName(prefix) + ": " + string.Join(", ", times) + " ms");
+            }
+            return 0;
+        }
+
+        private static PixelImage To16(PixelImage img)
+        {
+            if (img.BitDepth == 16) return img;
+            var o = new PixelImage(img.Width, img.Height, img.Channels, 16) { Metadata = img.Metadata, SourceFormat = img.SourceFormat };
+            for (int i = 0; i < img.Data8.Length; i++) o.Data16[i] = (ushort)(img.Data8[i] * 257);
+            return o;
+        }
+
+        private static PixelImage To8(PixelImage img)
+        {
+            if (img.BitDepth == 8) return img;
+            var o = new PixelImage(img.Width, img.Height, img.Channels, 8) { Metadata = img.Metadata, SourceFormat = img.SourceFormat };
+            for (int i = 0; i < img.Data16.Length; i++) o.Data8[i] = (byte)((img.Data16[i] * 255 + 32767) / 65535);
+            return o;
+        }
+
+        // lens-profile <lines.json> <name> <out.json>: fits the lines and writes a lens profile.
+        private static int LensProfileCmd(string[] a)
+        {
+            using (var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(a[1])))
+            {
+                var root = doc.RootElement;
+                var cal = new Desqueeze.Core.Lens.LensCalibration
+                {
+                    imageWidth = root.GetProperty("width").GetInt32(),
+                    imageHeight = root.GetProperty("height").GetInt32(),
+                    factor = root.GetProperty("factor").GetDouble(),
+                    sourceImage = root.TryGetProperty("source", out var src) ? src.GetString() : "",
+                };
+                foreach (var l in root.GetProperty("lines").EnumerateArray())
+                {
+                    var cl = new Desqueeze.Core.Lens.CalibrationLine { orientation = l.GetProperty("orientation").GetString() };
+                    foreach (var p in l.GetProperty("points").EnumerateArray())
+                        cl.points.Add(new Desqueeze.Core.Lens.LinePoint(p[0].GetDouble(), p[1].GetDouble()));
+                    cal.lines.Add(cl);
+                }
+                var prof = new Desqueeze.Core.Lens.LensProfile
+                {
+                    name = a[2], squeezeFactor = cal.factor, calibration = cal,
+                    created = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ssK", CultureInfo.InvariantCulture),
+                };
+                prof.modified = prof.created;
+                var r = prof.Refit();
+                File.WriteAllText(a[3], Desqueeze.Core.Lens.LensProfileJson.Write(prof));
+                Console.WriteLine(prof.name + ": " + r.Kind + ", " + prof.distortion + ", " + r.RmsBefore.ToString("0.00") + " -> " + r.RmsAfter.ToString("0.00") +
+                                  " px, " + Desqueeze.Core.Lens.DistortionSummary.Describe(prof.distortion, (double)cal.imageHeight / (cal.imageWidth * cal.factor)) +
+                                  (r.Warning != null ? " (" + r.Warning + ")" : ""));
+            }
+            return 0;
+        }
+
+        // lens-apply <in.png> <out.png|jpg> <profile.json> <model.bin> [amount] [AutoCrop|Uncropped] [After|Before|Single]: the app's pipeline with a profile.
+        private static int LensApplyCmd(string[] a)
+        {
+            Desqueeze.Core.Resampling.AxisSRModel.Default = Desqueeze.Core.Resampling.AxisSRModel.Load(a[4]);
+            var img = ImageIO.MakeUpright(PngCodec.Decode(File.ReadAllBytes(a[1])));
+            var prof = Desqueeze.Core.Lens.LensProfileJson.Read(File.ReadAllText(a[3]));
+            var s = new DesqueezeSettings { Factor = prof.squeezeFactor, WidthShare = 1, Distortion = prof.Distortion };
+            if (a.Length > 5) s.DistortionAmount = double.Parse(a[5], CultureInfo.InvariantCulture);
+            if (a.Length > 6) s.DistortionEdges = (Desqueeze.Core.Lens.DistortionEdges)Enum.Parse(typeof(Desqueeze.Core.Lens.DistortionEdges), a[6], true);
+            if (a.Length > 7) s.DistortionOrder = a[7].StartsWith("B", StringComparison.OrdinalIgnoreCase) ? Desqueeze.Core.Lens.DistortionOrder.BeforeDesqueeze
+                : a[7].StartsWith("S", StringComparison.OrdinalIgnoreCase) ? Desqueeze.Core.Lens.DistortionOrder.SinglePass : Desqueeze.Core.Lens.DistortionOrder.AfterDesqueeze;
+            var p = new ProgressTracker();
+            long mem0 = GC.GetTotalMemory(true);
+            var sw = Stopwatch.StartNew();
+            var r = Desqueezer.Process(img, s, p);
+            long ms = sw.ElapsedMilliseconds;
+            var g = Desqueezer.Geometry(img, s);
+            Console.WriteLine(img.Width + " x " + img.Height + " -> " + r.Width + " x " + r.Height + " (de-squeeze alone " + g.OutputWidth + " x " + g.OutputHeight + ") in " +
+                              ms + " ms, " + s + ", peak managed ~" + ((GC.GetTotalMemory(false) - mem0) / 1048576) + " MB");
+            File.WriteAllBytes(a[2], ImageIO.Encode(r, ImageIO.FormatFromExtension(a[2])));
+            return 0;
+        }
+
+        // distortion-fit <lines.json>: {"width", "height", "factor", "lines": [{"orientation", "points": [[x, y], ...]}]}
+        private static int DistortionFitCmd(string[] a)
+        {
+            using (var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(a[1])))
+            {
+                var root = doc.RootElement;
+                int w = root.GetProperty("width").GetInt32(), h = root.GetProperty("height").GetInt32();
+                double f = root.GetProperty("factor").GetDouble();
+                var lines = new List<Desqueeze.Core.Lens.CalibrationLine>();
+                var names = new List<string>();
+                foreach (var l in root.GetProperty("lines").EnumerateArray())
+                {
+                    var cl = new Desqueeze.Core.Lens.CalibrationLine { orientation = l.GetProperty("orientation").GetString() };
+                    foreach (var p in l.GetProperty("points").EnumerateArray())
+                        cl.points.Add(new Desqueeze.Core.Lens.LinePoint(p[0].GetDouble(), p[1].GetDouble()));
+                    lines.Add(cl);
+                    names.Add(l.TryGetProperty("name", out var n) ? n.GetString() : "");
+                }
+                var sw = Stopwatch.StartNew();
+                var r = Desqueeze.Core.Lens.DistortionFit.Fit(lines, w, h, f);
+                Console.WriteLine("fit in " + sw.ElapsedMilliseconds + " ms: " + r.Kind + ", " + r.Lines + " lines, " + r.Points + " points");
+                Console.WriteLine("model " + r.Model.ToString());
+                Console.WriteLine(string.Format(CultureInfo.InvariantCulture, "straightness RMS {0:0.00} px before, {1:0.00} px after", r.RmsBefore, r.RmsAfter));
+                double hh = h / (w * f);
+                Console.WriteLine(string.Format(CultureInfo.InvariantCulture, "largest displacement in frame: {0:0.0} px (de-squeezed, {1} px wide)",
+                    r.Model.MaxDisplacement(hh) * w * f / 2, (int)(w * f)));
+                for (int i = 0; i < lines.Count; i++)
+                    Console.WriteLine(string.Format(CultureInfo.InvariantCulture, "  {0,-18} {1,-10} {2,3} pts  rms after {3:0.00} px",
+                        names[i], lines[i].orientation, lines[i].points.Count, r.LineRms[i]));
+                if (r.Warning != null) Console.WriteLine("warning: " + r.Warning);
+                if (a.Length > 2) File.WriteAllText(a[2], string.Join(",", r.Model.Kx.Select(v => v.ToString("R", CultureInfo.InvariantCulture))) + ";" +
+                                                           string.Join(",", r.Model.Ky.Select(v => v.ToString("R", CultureInfo.InvariantCulture))));
+            }
+            return 0;
+        }
+
+        // circle-list <list.txt>: each line "image.png clickX clickY" -> one result line per image:
+        // "ok cx cy rx ry points rays rms ms" or "fail <reason>".
+        private static int CircleListCmd(string[] a)
+        {
+            if (Environment.GetEnvironmentVariable("CIRCLE_LOG") == "1") Desqueeze.Core.Calibration.CircleFinder.Log = Console.WriteLine;
+            foreach (var line in File.ReadAllLines(a[1]))
+            {
+                var f = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                if (f.Length < 3) continue;
+                var img = PngCodec.Decode(File.ReadAllBytes(f[0]));
+                var sw = Stopwatch.StartNew();
+                string err;
+                var fit = Desqueeze.Core.Calibration.CircleFinder.Find(img, double.Parse(f[1], CultureInfo.InvariantCulture),
+                    double.Parse(f[2], CultureInfo.InvariantCulture), out err);
+                if (fit == null) Console.WriteLine("fail " + err);
+                else
+                    Console.WriteLine(string.Format(CultureInfo.InvariantCulture, "ok {0:R} {1:R} {2:R} {3:R} {4} {5} {6:R} {7} {8} {9}",
+                        fit.CenterX, fit.CenterY, fit.RadiusX, fit.RadiusY, fit.EdgePoints, fit.Rays, fit.RmsError, sw.ElapsedMilliseconds,
+                        fit.ThinOutline ? 1 : 0, fit.Warning != null ? 1 : 0));
+            }
             return 0;
         }
 
@@ -446,6 +647,8 @@ namespace DesqueezeBench
             }
 
             OrientationTests(rnd);
+            CalibrationTests();
+            LensTests();
 
             string modelPath = Path.Combine("Assets", "StreamingAssets", "desqueeze-axissr.bin");
             if (File.Exists(modelPath)) AxisSRTests(modelPath);
@@ -617,6 +820,413 @@ namespace DesqueezeBench
                 Check(a1.Width == 49 && a1.Height == 110 && Equal(a1.Data8, a2.Data8),
                     "untagged portrait: turned, de-squeezed horizontally, turned back (60x90 -> " + a1.Width + "x" + a1.Height + ")");
             }
+        }
+
+        /// <summary>
+        /// An axis-aligned ellipse (a squeezed circle) rendered with 8x8 supersampling in linear light, plus noise.
+        /// ringWidth > 0 draws only an outline of that width (inside the ellipse). Pixel centres are at whole numbers.
+        /// </summary>
+        internal static PixelImage RenderEllipse(int w, int h, double cx, double cy, double a, double b, double inside, double outside,
+            double ringWidth, double noise, int seed)
+        {
+            var img = new PixelImage(w, h, 3, 8);
+            var rnd = new Random(seed);
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++)
+                {
+                    double sum = 0;
+                    for (int j = 0; j < 8; j++)
+                        for (int i = 0; i < 8; i++)
+                        {
+                            double u = (x - 0.5 + (i + 0.5) / 8 - cx) / a, v = (y - 0.5 + (j + 0.5) / 8 - cy) / b;
+                            bool inOuter = u * u + v * v <= 1;
+                            bool inInner = ringWidth > 0 &&
+                                           Math.Pow((x - 0.5 + (i + 0.5) / 8 - cx) / (a - ringWidth), 2) + Math.Pow((y - 0.5 + (j + 0.5) / 8 - cy) / (b - ringWidth), 2) <= 1;
+                            sum += inOuter && !inInner ? inside : outside;
+                        }
+                    double lin = sum / 64;
+                    double enc = Desqueeze.Core.Color.Srgb.FromLinear(lin);
+                    double g1 = rnd.NextDouble(), g2 = rnd.NextDouble();
+                    enc += noise * Math.Sqrt(-2 * Math.Log(1 - g1)) * Math.Cos(2 * Math.PI * g2);
+                    byte q = (byte)Math.Max(0, Math.Min(255, Math.Round(enc * 255)));
+                    int o = (y * w + x) * 3;
+                    img.Data8[o] = img.Data8[o + 1] = img.Data8[o + 2] = q;
+                }
+            return img;
+        }
+
+        private static void CalibrationTests()
+        {
+            Console.WriteLine("Calibration (circle finder)");
+            const double cx = 311.37, cy = 240.81, a = 120.4, b = 180.6;    // a circle of radius 180.6 squeezed 1.5x
+            var disk = RenderEllipse(640, 480, cx, cy, a, b, 0.02, 0.8, 0, 0.01, 1);
+            string err;
+            var fit = Desqueeze.Core.Calibration.CircleFinder.Find(disk, cx + 25, cy - 40, out err);
+            bool ok = fit != null && Math.Abs(fit.CenterX - cx) < 0.05 && Math.Abs(fit.CenterY - cy) < 0.05 &&
+                      Math.Abs(fit.RadiusX / a - 1) < 0.0005 && Math.Abs(fit.RadiusY / b - 1) < 0.0005;
+            Check(ok, "dark disk, click off-centre: " + (fit != null ? fit + ", factor " + fit.MeasuredFactor(SqueezeAxis.Horizontal).ToString("0.0000") : err));
+
+            var light = RenderEllipse(640, 480, cx, cy, b, a, 0.9, 0.05, 0, 0.01, 2);   // vertical squeeze, light on dark
+            fit = Desqueeze.Core.Calibration.CircleFinder.Find(light, cx - 60, cy + 10, out err);
+            ok = fit != null && Math.Abs(fit.MeasuredFactor(SqueezeAxis.Vertical) / 1.5 - 1) < 0.001 && !fit.DarkInside;
+            Check(ok, "light disk, vertical squeeze: " + (fit != null ? "factor " + fit.MeasuredFactor(SqueezeAxis.Vertical).ToString("0.0000") : err));
+
+            var ring = RenderEllipse(640, 480, cx, cy, a, b, 0.02, 0.8, 7, 0.01, 3);    // drawn outline 7 px wide
+            fit = Desqueeze.Core.Calibration.CircleFinder.Find(ring, cx, cy, out err);
+            ok = fit != null && Math.Abs(fit.RadiusX / a - 1) < 0.001 && Math.Abs(fit.RadiusY / b - 1) < 0.001;
+            Check(ok, "drawn ring outline: the outer edge is the circle (" + (fit != null ? fit.RadiusX.ToString("0.00") + " x " + fit.RadiusY.ToString("0.00") : err) + ")");
+
+            fit = Desqueeze.Core.Calibration.CircleFinder.Find(disk, 20, 20, out err);
+            Check(fit == null && err != null, "click outside any circle -> clear message (" + err + ")");
+
+            // The preview puts the ring exactly on the circle when the factor is right, and off it when it is not.
+            fit = Desqueeze.Core.Calibration.CircleFinder.Find(disk, cx, cy, out err);
+            bool preview = fit != null;
+            foreach (var share in new[] { 0.0, 0.5, 1.0 })
+            {
+                if (!preview) break;
+                var s = new DesqueezeSettings { Factor = 1.5, WidthShare = share, Algorithm = ResampleAlgorithm.Lanczos3 };
+                var p = Desqueeze.Core.Calibration.CalibrationPreview.Render(disk, fit, s, SqueezeAxis.Horizontal);
+                double ex = p.ImageRadiusX / p.RingRadius - 1, ey = p.ImageRadiusY / p.RingRadius - 1;
+                var refit = Desqueeze.Core.Calibration.CircleFinder.Find(p.Image, p.CenterX, p.CenterY, out err);
+                bool round = refit != null && Math.Abs(refit.RadiusX / p.RingRadius - 1) < 0.002 && Math.Abs(refit.RadiusY / p.RingRadius - 1) < 0.002 &&
+                             Math.Abs(refit.CenterX - p.CenterX) < 0.1 && Math.Abs(refit.CenterY - p.CenterY) < 0.1;
+                if (Math.Abs(ex) > 0.0006 || Math.Abs(ey) > 0.0006 || !round)
+                {
+                    preview = false;
+                    Console.WriteLine("    share " + share + ": ring " + p.RingRadius.ToString("0.00") + ", image " + p.ImageRadiusX.ToString("0.00") + " x " +
+                                      p.ImageRadiusY.ToString("0.00") + (refit != null ? ", found in preview " + refit : ", " + err));
+                }
+            }
+            Check(preview, "preview at 1.5x (3 splits): the de-squeezed circle is round and fills the ring");
+            if (fit != null)
+            {
+                var off = Desqueeze.Core.Calibration.CalibrationPreview.Render(disk, fit, new DesqueezeSettings { Factor = 1.4, WidthShare = 1 }, SqueezeAxis.Horizontal);
+                Check(off.ImageRadiusX < off.RingRadius * 0.95, "preview at a wrong factor (1.4x): the circle stays narrower than the ring (" +
+                      off.ImageRadiusX.ToString("0.0") + " vs " + off.RingRadius.ToString("0.0") + ")");
+            }
+        }
+
+        // ------------------------------------------------------------------------------------------- lens
+
+        private static Desqueeze.Core.Lens.DistortionModel Model(double kx1, double ky1, double kx2 = 0, double ky2 = 0)
+        {
+            var m = new Desqueeze.Core.Lens.DistortionModel();
+            m.Kx[0] = kx1; m.Ky[0] = ky1; m.Kx[1] = kx2; m.Ky[1] = ky2;
+            return m;
+        }
+
+        /// <summary>Straight lines in the undistorted plane, seen through the lens, as pixel points of a W x H capture.</summary>
+        private static List<Desqueeze.Core.Lens.CalibrationLine> SyntheticLines(Desqueeze.Core.Lens.DistortionModel m, int w, int h, double f,
+            double noise, int seed, bool horizontal = true, bool vertical = true)
+        {
+            var frame = new Desqueeze.Core.Lens.LensFrame(w, h, f);
+            var rnd = new Random(seed);
+            var lines = new List<Desqueeze.Core.Lens.CalibrationLine>();
+            double hh = frame.HalfHeight;
+            Func<double> gauss = () => Math.Sqrt(-2 * Math.Log(1 - rnd.NextDouble())) * Math.Cos(2 * Math.PI * rnd.NextDouble());
+            for (int k = 0; k < 7; k++)
+            {
+                double c = -0.92 + 1.84 * k / 6;
+                foreach (bool horiz in new[] { true, false })
+                {
+                    if (horiz && !horizontal || !horiz && !vertical) continue;
+                    var l = new Desqueeze.Core.Lens.CalibrationLine { orientation = horiz ? "horizontal" : "vertical" };
+                    for (int i = 0; i <= 24; i++)
+                    {
+                        double t = -1.2 + 2.4 * i / 24;
+                        double xu = horiz ? t : c, yu = horiz ? c * hh : t * hh;
+                        double xd, yd, px, py;
+                        m.Distort(xu, yu, out xd, out yd);
+                        if (Math.Abs(xd) > 0.99 || Math.Abs(yd) > hh * 0.99) continue;
+                        frame.ToPixel(xd, yd, out px, out py);
+                        l.points.Add(new Desqueeze.Core.Lens.LinePoint(px + noise * gauss(), py + noise * gauss()));
+                    }
+                    if (l.points.Count >= 3) lines.Add(l);
+                }
+            }
+            return lines;
+        }
+
+        /// <summary>Largest difference between two models' corrections over the frame, in de-squeezed pixels.</summary>
+        private static double ModelDifference(Desqueeze.Core.Lens.DistortionModel a, Desqueeze.Core.Lens.DistortionModel b, double hh, double pxPerUnit)
+        {
+            double worst = 0;
+            for (int i = 0; i <= 40; i++)
+                for (int j = 0; j <= 40; j++)
+                {
+                    double x = -1 + 2.0 * i / 40, y = (-1 + 2.0 * j / 40) * hh, ax, ay, bx, by;
+                    a.Undistort(x, y, out ax, out ay);
+                    b.Undistort(x, y, out bx, out by);
+                    worst = Math.Max(worst, Math.Sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by)) * pxPerUnit);
+                }
+            return worst;
+        }
+
+        private static PixelImage Pattern(int w, int h, int ch, int depth, int seed)
+        {
+            var img = new PixelImage(w, h, ch, depth);
+            var rnd = new Random(seed);
+            // smooth-ish random field: sum of a few sinusoids per channel
+            var ph = new double[ch * 6];
+            for (int i = 0; i < ph.Length; i++) ph[i] = rnd.NextDouble() * 6.283;
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++)
+                    for (int c = 0; c < ch; c++)
+                    {
+                        double v = 0.5 + 0.2 * Math.Sin(x * 0.11 + ph[c * 6]) * Math.Cos(y * 0.07 + ph[c * 6 + 1]) + 0.15 * Math.Sin((x + 2 * y) * 0.031 + ph[c * 6 + 2]);
+                        if (img.HasAlpha && c == ch - 1) v = 1;
+                        int o = (y * w + x) * ch + c;
+                        if (depth == 8) img.Data8[o] = (byte)Math.Round(v * 255);
+                        else img.Data16[o] = (ushort)Math.Round(v * 65535);
+                    }
+            return img;
+        }
+
+        private static double Psnr8(PixelImage a, PixelImage b, int margin)
+        {
+            double se = 0;
+            long n = 0;
+            int ch = a.Channels;
+            for (int y = margin; y < a.Height - margin; y++)
+                for (int x = margin; x < a.Width - margin; x++)
+                    for (int c = 0; c < ch; c++)
+                    {
+                        int o = (y * a.Width + x) * ch + c;
+                        double d = a.BitDepth == 8 ? a.Data8[o] - b.Data8[o] : (a.Data16[o] - b.Data16[o]) / 257.0;
+                        se += d * d;
+                        n++;
+                    }
+            return se == 0 ? 99 : 10 * Math.Log10(255.0 * 255.0 * n / se);
+        }
+
+        private static void LensTests()
+        {
+            Console.WriteLine("Lens distortion");
+            var models = new[]
+            {
+                Model(-0.03, -0.03), Model(0.04, 0.04), Model(-0.06, -0.02, 0.01, 0.004), Model(-0.08, -0.08, 0.05, 0.05), Model(0.02, -0.03),
+            };
+            bool inv = true, jac = true;
+            var rnd = new Random(3);
+            foreach (var m in models)
+                for (int i = 0; i < 400; i++)
+                {
+                    double xu = rnd.NextDouble() * 2 - 1, yu = (rnd.NextDouble() * 2 - 1) * 0.7, xd, yd, bx, by, a, b, c, d;
+                    m.Distort(xu, yu, out xd, out yd, out a, out b, out c, out d);
+                    if (!m.Undistort(xd, yd, out bx, out by) || Math.Abs(bx - xu) > 1e-9 || Math.Abs(by - yu) > 1e-9) inv = false;
+                    const double h = 1e-6;
+                    double x1, y1, x2, y2;
+                    m.Distort(xu + h, yu, out x1, out y1);
+                    m.Distort(xu - h, yu, out x2, out y2);
+                    if (Math.Abs((x1 - x2) / (2 * h) - a) > 1e-6 || Math.Abs((y1 - y2) / (2 * h) - c) > 1e-6) jac = false;
+                    m.Distort(xu, yu + h, out x1, out y1);
+                    m.Distort(xu, yu - h, out x2, out y2);
+                    if (Math.Abs((x1 - x2) / (2 * h) - b) > 1e-6 || Math.Abs((y1 - y2) / (2 * h) - d) > 1e-6) jac = false;
+                }
+            Check(inv, "undistort inverts distort (5 models incl. anamorphic and moustache, 2000 points, < 1e-9)");
+            Check(jac, "analytic Jacobian matches finite differences");
+            var scaled = Model(-0.04, -0.02, 0.01, 0).Scaled(0.5);
+            Check(Math.Abs(scaled.Kx[0] + 0.02) < 1e-15 && Math.Abs(scaled.Ky[0] + 0.01) < 1e-15 && Math.Abs(scaled.Kx[1] - 0.005) < 1e-15,
+                "amount scales the coefficients");
+
+            // plumb-line fit
+            const int W = 6000, H = 4000;
+            const double F = 1.5;
+            double hh = (double)H / (W * F), ppu = W * F / 2;
+            foreach (var truth in new[] { Model(-0.03, -0.03), Model(0.025, 0.025), Model(-0.04, -0.02) })
+            {
+                var lines = SyntheticLines(truth, W, H, F, 0.25, 11);
+                var sw = Stopwatch.StartNew();
+                var r = Desqueeze.Core.Lens.DistortionFit.Fit(lines, W, H, F);
+                double diff = ModelDifference(truth, r.Model, hh, ppu);
+                Check(diff < 1.5 && r.RmsAfter < 0.5 && r.RmsBefore > 3 * r.RmsAfter,
+                    "fit recovers " + truth + ": max error " + diff.ToString("0.00") + " px, straightness " + r.RmsBefore.ToString("0.00") + " -> " +
+                    r.RmsAfter.ToString("0.00") + " px (" + r.Kind + ", " + r.Lines + " lines, " + r.Points + " points, " + sw.ElapsedMilliseconds + " ms)");
+            }
+            {
+                var truth = Model(-0.03, -0.03);
+                var r = Desqueeze.Core.Lens.DistortionFit.Fit(SyntheticLines(truth, W, H, F, 0.25, 12, true, false), W, H, F);
+                Check(ModelDifference(truth, r.Model, hh, ppu) < 2.5, "horizontal lines alone measure a radial lens (" + r.Kind + ")");
+                var clean = SyntheticLines(truth, W, H, F, 0, 13);
+                clean[2].points[clean[2].points.Count / 2] = new Desqueeze.Core.Lens.LinePoint(clean[2].points[clean[2].points.Count / 2].x + 25, clean[2].points[clean[2].points.Count / 2].y + 25);
+                var rr = Desqueeze.Core.Lens.DistortionFit.Fit(clean, W, H, F);
+                Check(ModelDifference(truth, rr.Model, hh, ppu) < 1.0, "one misplaced point (25 px off) barely moves the fit (robust weighting)");
+                var none = Desqueeze.Core.Lens.DistortionFit.Fit(new List<Desqueeze.Core.Lens.CalibrationLine>(), W, H, F);
+                Check(none.Lines == 0 && none.Model.IsIdentity && none.Warning != null, "no lines: identity and a hint");
+            }
+
+            // canvas
+            {
+                var barrel = Model(-0.05, -0.05);
+                var crop = Desqueeze.Core.Lens.LensCorrection.Canvas(barrel, hh, Desqueeze.Core.Lens.DistortionEdges.AutoCrop);
+                var full = Desqueeze.Core.Lens.LensCorrection.Canvas(barrel, hh, Desqueeze.Core.Lens.DistortionEdges.Uncropped);
+                bool inside = true, touches = false;
+                for (int i = 0; i <= 200; i++)
+                {
+                    double t = i / 200.0;
+                    foreach (var p in new[] { new[] { crop.X0 + t * crop.Width, crop.Y0 }, new[] { crop.X0 + t * crop.Width, crop.Y1 }, new[] { crop.X0, crop.Y0 + t * crop.Height }, new[] { crop.X1, crop.Y0 + t * crop.Height } })
+                    {
+                        double xd, yd;
+                        barrel.Distort(p[0], p[1], out xd, out yd);
+                        if (Math.Abs(xd) > 1 + 1e-9 || Math.Abs(yd) > hh + 1e-9) inside = false;
+                        if (Math.Abs(xd) > 1 - 1e-6 || Math.Abs(yd) > hh - 1e-6) touches = true;
+                    }
+                }
+                Check(inside && touches && Math.Abs(crop.Width / crop.Height - 1 / hh) < 1e-9,
+                    "auto-crop: the largest rectangle of the frame's shape inside the source " + crop);
+                Check(full.X0 < -1 && full.X1 > 1 && full.Y0 < -hh && full.Y1 > hh, "uncropped (barrel): everything the photo shows, beyond the frame " + full);
+                var pin = Desqueeze.Core.Lens.LensCorrection.Canvas(Model(0.05, 0.05), hh, Desqueeze.Core.Lens.DistortionEdges.AutoCrop);
+                Check(pin.X1 < 1 && pin.Y1 < hh, "auto-crop (pincushion) crops inside the frame " + pin);
+            }
+
+            // warp invariants
+            bool ident = true;
+            foreach (var ch in new[] { 1, 2, 3, 4 })
+                foreach (var depth in new[] { 8, 16 })
+                {
+                    var img = Pattern(61, 37, ch, depth, ch * 10 + depth);
+                    var frame = new Desqueeze.Core.Lens.CanvasRect(-1, -37.0 / 61, 1, 37.0 / 61);
+                    var o = Desqueeze.Core.Lens.LensCorrection.Correct(img, 1, new Desqueeze.Core.Lens.DistortionModel(), frame, 61, 37,
+                        Desqueezer.DistortionWarpOptions(img, depth));
+                    for (int i = 0; i < img.Width * img.Height * ch; i++)
+                    {
+                        int dv = depth == 8 ? Math.Abs(img.Data8[i] - o.Data8[i]) : Math.Abs(img.Data16[i] - o.Data16[i]);
+                        if (dv > (depth == 8 ? 0 : 2)) { ident = false; break; }
+                    }
+                }
+            Check(ident, "warp with the identity reproduces the image (1-4 channels, 8/16-bit, sigmoidal light)");
+            {
+                var flat = new PixelImage(300, 200, 3, 16);
+                for (int i = 0; i < flat.Data16.Length; i++) flat.Data16[i] = 30000;
+                var m = Model(-0.06, -0.03, 0.01, 0.005);
+                double fh = 200.0 / 300;
+                var crop = Desqueeze.Core.Lens.LensCorrection.Canvas(m, fh, Desqueeze.Core.Lens.DistortionEdges.AutoCrop);
+                var o = Desqueeze.Core.Lens.LensCorrection.Correct(flat, 1, m, crop, 300, 200, Desqueezer.DistortionWarpOptions(flat, 16));
+                bool ok = true;
+                for (int i = 0; i < o.Data16.Length; i++) if (Math.Abs(o.Data16[i] - 30000) > 3) { ok = false; break; }
+                Check(ok, "flat field stays flat through an auto-cropped correction (no dark edges)");
+            }
+
+            // full pipeline
+            {
+                var img = Pattern(240, 160, 3, 8, 5);
+                var plain = new DesqueezeSettings { Factor = 1.5, WidthShare = 1, Widen = WidenMethod.Kernel };
+                var r0 = Desqueezer.Process(img, plain);
+                var zero = plain.Clone(); zero.Distortion = Model(-0.05, -0.05); zero.DistortionAmount = 0;
+                var idm = plain.Clone(); idm.Distortion = new Desqueeze.Core.Lens.DistortionModel();
+                Check(Equal(r0.Data8, Desqueezer.Process(img, zero).Data8) && Equal(r0.Data8, Desqueezer.Process(img, idm).Data8),
+                    "no distortion, an identity model or amount 0% give exactly the plain de-squeeze");
+
+                var s = plain.Clone();
+                s.Distortion = Model(-0.05, -0.03, 0.005, 0);
+                foreach (var edges in new[] { Desqueeze.Core.Lens.DistortionEdges.AutoCrop, Desqueeze.Core.Lens.DistortionEdges.Uncropped })
+                {
+                    s.DistortionEdges = edges;
+                    var outs = new List<PixelImage>();
+                    foreach (var order in new[] { Desqueeze.Core.Lens.DistortionOrder.AfterDesqueeze, Desqueeze.Core.Lens.DistortionOrder.BeforeDesqueeze, Desqueeze.Core.Lens.DistortionOrder.SinglePass })
+                    {
+                        s.DistortionOrder = order;
+                        int ew, eh;
+                        Desqueezer.OutputSize(img, s, out ew, out eh);
+                        var r = Desqueezer.Process(img, s);
+                        if (r.Width != ew || r.Height != eh) Check(false, "output size matches OutputSize for " + order + " " + edges);
+                        outs.Add(r);
+                    }
+                    double p1 = Psnr8(outs[0], outs[1], 8), p2 = Psnr8(outs[0], outs[2], 8);
+                    Check(p1 > 33 && p2 > 33, edges + ": after, before and one-pass agree (" + p1.ToString("0.0") + " / " + p2.ToString("0.0") +
+                          " dB) at " + outs[0].Width + " x " + outs[0].Height);
+                    // Barrel correction pulls the corners out furthest, so uncropped the gaps are at the middle of each edge.
+                    int corner = 0, midTop = (outs[0].Width / 2) * 3;
+                    if (edges == Desqueeze.Core.Lens.DistortionEdges.Uncropped)
+                        Check(outs[0].Data8[midTop] == 0 && outs[0].Data8[midTop + 1] == 0 && outs[0].Data8[corner] > 40,
+                            "uncropped barrel correction: black where the photo doesn't reach (middle of the edges), picture in the corners");
+                    else
+                        Check(outs[0].Data8[corner] > 40 && outs[0].Data8[midTop] > 40, "auto-crop: corners and edges are filled");
+                }
+
+                // a portrait shot (camera turned, EXIF 6) is corrected in the sensor's frame
+                var sideways = Pattern(150, 100, 3, 8, 9);
+                var up = Orientation.Apply(sideways, 6);
+                up.Metadata.SourceOrientation = 6;
+                var sv = plain.Clone();
+                sv.Distortion = Model(-0.05, -0.02);
+                var viaUp = Desqueezer.Process(up, sv);
+                var viaStored = Orientation.Apply(Desqueezer.Process(sideways, sv), 6);
+                Check(viaUp.Width == viaStored.Width && viaUp.Height == viaStored.Height && Equal(viaUp.Data8, viaStored.Data8),
+                    "portrait (EXIF 6): correcting upright = correcting the stored pixels, then turning");
+            }
+
+            // orientation point mapping matches the pixel transform
+            {
+                bool okMap = true;
+                for (int o = 1; o <= 8; o++)
+                {
+                    var img = new PixelImage(5, 3, 1, 8);
+                    img.Data8[1 * 5 + 3] = 255;
+                    var t = Orientation.Apply(img, o);
+                    double ox, oy;
+                    Orientation.MapPoint(o, 5, 3, 3, 1, out ox, out oy);
+                    if (t.Data8[(int)oy * t.Width + (int)ox] != 255) okMap = false;
+                }
+                Check(okMap, "orientation point mapping follows the pixels (all 8 orientations)");
+            }
+
+            // edge snapping
+            {
+                var img = new PixelImage(80, 60, 1, 8);
+                const double edge = 30.3;
+                for (int y = 0; y < 60; y++)
+                    for (int x = 0; x < 80; x++)
+                    {
+                        double cover = Math.Max(0, Math.Min(1, y + 0.5 - edge));
+                        img.Data8[y * 80 + x] = (byte)Math.Round(Srgb8(0.1 + 0.7 * cover));
+                    }
+                double sx, sy;
+                int pol;
+                bool found = Desqueeze.Core.Lens.EdgeSnap.Snap(img, 40, 34, true, 8, 0, out sx, out sy, out pol);
+                Check(found && Math.Abs(sy - edge) < 0.1 && pol == 1 && sx == 40,
+                    "snap finds a horizontal edge to a fraction of a pixel (" + sy.ToString("0.00") + " vs " + edge.ToString("0.00") + ")");
+                Check(!Desqueeze.Core.Lens.EdgeSnap.Snap(img, 40, 34, true, 8, -1, out sx, out sy, out pol), "snap keeps the line's polarity (no light-to-dark edge here)");
+            }
+
+            // profiles
+            {
+                var p = new Desqueeze.Core.Lens.LensProfile
+                {
+                    name = "Test \"lens\" \\ 1.54x", squeezeFactor = 1.54, notes = "line 1\nline 2\tend",
+                    hasDistortion = true, distortion = Model(-0.0153, -0.0153, 0.001, 0), distortionKind = "radial", distortionRms = 0.95,
+                    created = "2026-11-10T21:00:00Z", modified = "2026-11-10T21:05:00Z",
+                };
+                p.calibration = new Desqueeze.Core.Lens.LensCalibration { imageWidth = W, imageHeight = H, factor = 1.54, sourceImage = "wall.jpg" };
+                p.calibration.lines.AddRange(SyntheticLines(p.distortion, W, H, 1.54, 0.1, 21));
+                string json = Desqueeze.Core.Lens.LensProfileJson.Write(p);
+                var back = Desqueeze.Core.Lens.LensProfileJson.Read(json);
+                Check(Desqueeze.Core.Lens.LensProfileJson.Write(back) == json && back.SameSettings(p) && back.name == p.name && back.notes == p.notes &&
+                      back.calibration.lines.Count == p.calibration.lines.Count, "lens profile JSON round trip (" + json.Length + " bytes)");
+                bool rejected = false;
+                try { Desqueeze.Core.Lens.LensProfileJson.Read("{\"format\": \"something-else\"}"); } catch (FormatException) { rejected = true; }
+                bool rejected2 = false;
+                try { Desqueeze.Core.Lens.LensProfileJson.Read("{\"format\": \"desqueeze-lens-profile\", \"squeezeFactor\": 1.5,"); } catch (FormatException) { rejected2 = true; }
+                Check(rejected && rejected2, "files that aren't lens profiles are refused with a message");
+
+                var refit = p.Clone();
+                refit.squeezeFactor = 1.5;
+                var rr = refit.Refit();
+                Check(rr != null && rr.Lines > 0 && Math.Abs(refit.calibration.factor - 1.5) < 1e-12 && rr.RmsAfter < 0.5,
+                    "refit for a new factor keeps the lines straight (" + rr.RmsAfter.ToString("0.00") + " px)");
+
+                Check(Desqueeze.Core.Lens.DistortionSummary.Classify(Model(-0.03, -0.03), hh) == Desqueeze.Core.Lens.DistortionType.Barrel &&
+                      Desqueeze.Core.Lens.DistortionSummary.Classify(Model(0.03, 0.03), hh) == Desqueeze.Core.Lens.DistortionType.Pincushion &&
+                      Desqueeze.Core.Lens.DistortionSummary.Classify(new Desqueeze.Core.Lens.DistortionModel(), hh) == Desqueeze.Core.Lens.DistortionType.None,
+                    "distortion described as barrel / pincushion: " + Desqueeze.Core.Lens.DistortionSummary.Describe(Model(-0.03, -0.03), hh));
+            }
+        }
+
+        private static double Srgb8(double linear)
+        {
+            double v = linear <= 0.0031308 ? linear * 12.92 : 1.055 * Math.Pow(linear, 1 / 2.4) - 0.055;
+            return v * 255;
         }
 
         private static void AxisSRTests(string modelPath)

@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using Desqueeze.Core.Imaging;
+using Desqueeze.Core.Lens;
 using Desqueeze.Core.Resampling;
 
 namespace Desqueeze.Core
@@ -87,20 +88,15 @@ namespace Desqueeze.Core
             var s = settings.Clone();
             s.Validate();
             if (AxisChooser.Choose(s.Direction, source).Axis == SqueezeAxis.Horizontal)
-            {
-                var g = DesqueezeGeometry.Compute(source.Width, source.Height, s.Factor, s.WidthShare, SqueezeAxis.Horizontal);
-                return Resize(source, g.OutputWidth, g.OutputHeight, s, progress, ct);
-            }
+                return ProcessSensor(source, s, progress, ct);
 
             // Vertical squeeze: turn the image a quarter turn so the squeeze runs horizontally, run exactly the horizontal
             // pipeline, and turn the result back. When the camera's orientation tag says how it was turned, the internal
             // turn undoes that, so the resampler sees the sensor's own pixels and the result is identical to
             // de-squeezing the sideways file and rotating it afterwards.
-            int o = source.Metadata != null ? source.Metadata.SourceOrientation : 0;
-            int turn = Orientation.SwapsAxes(o) ? Orientation.Inverse(o) : Orientation.Rotate90Clockwise;
+            int turn = SensorTurn(source, s.Direction);
             var turned = Orientation.Apply(source, turn);
-            var gt = DesqueezeGeometry.Compute(turned.Width, turned.Height, s.Factor, s.WidthShare, SqueezeAxis.Horizontal);
-            var r = Resize(turned, gt.OutputWidth, gt.OutputHeight, s, progress, ct);
+            var r = ProcessSensor(turned, s, progress, ct);
             turned = null;
             ct.ThrowIfCancellationRequested();
             var back = Orientation.Apply(r, Orientation.Inverse(turn));
@@ -109,11 +105,123 @@ namespace Desqueeze.Core
             return back;
         }
 
-        /// <summary>The output geometry <see cref="Process"/> will produce for this image and these settings.</summary>
+        /// <summary>
+        /// The orientation <see cref="Process"/> applies to the upright image to get the frame it works in, where the
+        /// squeeze runs horizontally (the sensor's own orientation when the camera tagged how it was held):
+        /// <see cref="Orientation.Normal"/> for a horizontal squeeze. Lens distortion is measured in that frame, so
+        /// calibration points placed on the upright image are mapped through it (see <see cref="Orientation.MapPoint"/>).
+        /// </summary>
+        public static int SensorTurn(PixelImage source, SqueezeDirection direction)
+        {
+            if (AxisChooser.Choose(direction, source).Axis == SqueezeAxis.Horizontal) return Orientation.Normal;
+            int o = source.Metadata != null ? source.Metadata.SourceOrientation : 0;
+            return Orientation.SwapsAxes(o) ? Orientation.Inverse(o) : Orientation.Rotate90Clockwise;
+        }
+
+        /// <summary>
+        /// The de-squeeze geometry for this image and these settings (before any distortion correction; see
+        /// <see cref="OutputSize"/> for the final size).
+        /// </summary>
         public static DesqueezeGeometry Geometry(PixelImage source, DesqueezeSettings settings)
         {
             var axis = AxisChooser.Choose(settings.Direction, source).Axis;
             return DesqueezeGeometry.Compute(source.Width, source.Height, settings.Factor, settings.WidthShare, axis);
+        }
+
+        /// <summary>The size of the image <see cref="Process"/> returns, including distortion correction.</summary>
+        public static void OutputSize(PixelImage source, DesqueezeSettings settings, out int width, out int height)
+        {
+            bool horiz = AxisChooser.Choose(settings.Direction, source).Axis == SqueezeAxis.Horizontal;
+            int sw = horiz ? source.Width : source.Height, sh = horiz ? source.Height : source.Width;
+            int w, h;
+            SensorOutputSize(sw, sh, settings, out w, out h);
+            width = horiz ? w : h;
+            height = horiz ? h : w;
+        }
+
+        /// <summary>
+        /// Output size for a sensor-oriented (horizontally squeezed) image <paramref name="srcW"/> x <paramref name="srcH"/>,
+        /// and the canvas of the undistorted plane it shows. The corrected picture keeps the de-squeezed scale at the
+        /// centre of the frame, where the lens is sharpest, so no detail is lost there.
+        /// </summary>
+        public static void SensorOutputSize(int srcW, int srcH, DesqueezeSettings s, out int width, out int height)
+        {
+            CanvasRect canvas;
+            SensorCanvas(srcW, srcH, s, out width, out height, out canvas);
+        }
+
+        private static DistortionModel SensorCanvas(int srcW, int srcH, DesqueezeSettings s, out int width, out int height, out CanvasRect canvas)
+        {
+            var g = DesqueezeGeometry.Compute(srcW, srcH, s.Factor, s.WidthShare, SqueezeAxis.Horizontal);
+            width = g.OutputWidth;
+            height = g.OutputHeight;
+            double hh = (double)srcH / (srcW * s.Factor);
+            canvas = new CanvasRect(-1, -hh, 1, hh);
+            var model = s.ActiveDistortion();
+            if (model == null) return null;
+            canvas = LensCorrection.Canvas(model, hh, s.DistortionEdges);
+            double ppu = g.OutputWidth / 2.0;
+            LensCorrection.CanvasSize(canvas, ppu, ppu, out width, out height);
+            return model;
+        }
+
+        /// <summary>
+        /// Options for the distortion warp, chosen by experiment (see README): separable Lanczos 3, which reproduces the
+        /// image exactly where the map is the identity (the radial Lanczos of Fisheye Friend blurs there and scored
+        /// 1.6-3.9 dB lower), in sigmoidal light (gamma for images with alpha), widening the footprint where the map shrinks.
+        /// </summary>
+        public static WarpOptions DistortionWarpOptions(PixelImage source, int outputBitDepth)
+        {
+            return new WarpOptions
+            {
+                Kernel = WarpKernel.TensorLanczos,
+                Radius = 3,
+                Light = source != null && source.HasAlpha ? LightSpace.Gamma : LightSpace.Sigmoidal,
+                Antialias = true,
+                OutputBitDepth = outputBitDepth,
+            };
+        }
+
+        /// <summary>De-squeeze (and distortion correction) of an image whose squeeze runs horizontally.</summary>
+        private static PixelImage ProcessSensor(PixelImage src, DesqueezeSettings s, ProgressTracker progress, CancellationToken ct)
+        {
+            int ow, oh;
+            CanvasRect canvas;
+            var model = SensorCanvas(src.Width, src.Height, s, out ow, out oh, out canvas);
+            var g = DesqueezeGeometry.Compute(src.Width, src.Height, s.Factor, s.WidthShare, SqueezeAxis.Horizontal);
+            if (model == null) return Resize(src, g.OutputWidth, g.OutputHeight, s, progress, ct);
+
+            PixelImage result;
+            switch (s.DistortionOrder)
+            {
+                case DistortionOrder.SinglePass:
+                    // One resampling straight from the capture; the warp's footprint handles the squeeze.
+                    result = LensCorrection.Correct(src, s.Factor, model, canvas, ow, oh, DistortionWarpOptions(src, src.BitDepth), progress, ct);
+                    break;
+                case DistortionOrder.BeforeDesqueeze:
+                {
+                    // Correct at the capture's own resolution (still squeezed), then de-squeeze the corrected image.
+                    int cw, ch;
+                    LensCorrection.CanvasSize(canvas, src.Width / 2.0, src.Width * s.Factor / 2.0, out cw, out ch);
+                    var und = LensCorrection.Correct(src, s.Factor, model, canvas, cw, ch, DistortionWarpOptions(src, 16),
+                        ProgressTracker.Slice(progress, 0f, 0.3f), ct);
+                    ct.ThrowIfCancellationRequested();
+                    result = ResizeTo(und, ow, oh, s, src.BitDepth, ProgressTracker.Slice(progress, 0.3f, 1f), ct);
+                    break;
+                }
+                default:
+                {
+                    // De-squeeze first, so the detail widener sees the lens's own pixels, keeping 16 bits for the warp.
+                    var dq = ResizeTo(src, g.OutputWidth, g.OutputHeight, s, 16, ProgressTracker.Slice(progress, 0f, 0.7f), ct);
+                    ct.ThrowIfCancellationRequested();
+                    result = LensCorrection.Correct(dq, 1.0, model, canvas, ow, oh, DistortionWarpOptions(src, src.BitDepth),
+                        ProgressTracker.Slice(progress, 0.7f, 1f), ct);
+                    break;
+                }
+            }
+            result.Metadata = src.Metadata != null ? src.Metadata.Clone() : new ImageMetadata();
+            result.SourceFormat = src.SourceFormat;
+            return result;
         }
 
         /// <summary>
@@ -133,20 +241,42 @@ namespace Desqueeze.Core
             ProgressTracker progress = null, CancellationToken ct = default)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
+            return ResizeTo(source, width, height, settings, source.BitDepth, progress, ct);
+        }
+
+        /// <summary>As <see cref="Resize"/>, writing an image of <paramref name="bitDepth"/> bits per sample (8 or 16).</summary>
+        public static PixelImage ResizeTo(PixelImage source, int width, int height, DesqueezeSettings settings, int bitDepth,
+            ProgressTracker progress = null, CancellationToken ct = default)
+        {
+            if (source == null) throw new ArgumentNullException(nameof(source));
             if (width <= 0 || height <= 0) throw new ArgumentException("Output size must be positive.");
+            if (bitDepth != 8 && bitDepth != 16) throw new ArgumentException("Bit depth must be 8 or 16.");
             var s = settings.Clone();
             s.Validate();
-            var dst = source.CreateLike(width, height);
+            var dst = source.CreateLike(width, height, bitDepth);
 
             if (width == source.Width && height == source.Height)
             {
-                if (source.BitDepth == 8) Buffer.BlockCopy(source.Data8, 0, dst.Data8, 0, source.Data8.Length);
-                else Buffer.BlockCopy(source.Data16, 0, dst.Data16, 0, source.Data16.Length * 2);
+                if (source.BitDepth == bitDepth)
+                {
+                    if (bitDepth == 8) Buffer.BlockCopy(source.Data8, 0, dst.Data8, 0, source.Data8.Length);
+                    else Buffer.BlockCopy(source.Data16, 0, dst.Data16, 0, source.Data16.Length * 2);
+                }
+                else if (bitDepth == 16)
+                {
+                    byte[] a = source.Data8; ushort[] b = dst.Data16;
+                    for (int i = 0; i < a.Length; i++) b[i] = (ushort)(a[i] * 257);
+                }
+                else
+                {
+                    ushort[] a = source.Data16; byte[] b = dst.Data8;
+                    for (int i = 0; i < a.Length; i++) b[i] = (byte)((a[i] * 255 + 32767) / 65535);
+                }
                 if (progress != null) progress.Report(1f);
                 return dst;
             }
 
-            PixelImage learned = TryLearned(source, width, height, s, progress, ct);
+            PixelImage learned = TryLearned(source, width, height, s, bitDepth, progress, ct);
             if (learned != null) return learned;
 
             if (s.Algorithm == ResampleAlgorithm.EwaLanczosSharp)
@@ -174,7 +304,7 @@ namespace Desqueeze.Core
         /// Learned path: enlarge the stretched axis first, at full resolution on the other axis (that is where the
         /// extra information comes from), then shorten the other axis with the selected kernel if needed.
         /// </summary>
-        private static PixelImage TryLearned(PixelImage source, int width, int height, DesqueezeSettings s,
+        private static PixelImage TryLearned(PixelImage source, int width, int height, DesqueezeSettings s, int bitDepth,
             ProgressTracker progress, CancellationToken ct)
         {
             if (!UsesLearned(source.Width, source.Height, width, height, s)) return null;
@@ -187,7 +317,7 @@ namespace Desqueeze.Core
             var opts = new AxisSROptions
             {
                 UseNetwork = s.Widen == WidenMethod.Detail,
-                OutputBitDepth = shrinkOther ? 16 : source.BitDepth,   // keep precision for the second pass
+                OutputBitDepth = shrinkOther ? 16 : bitDepth,   // keep precision for the second pass
             };
             var grown = AxisSR.Upscale(source, outLen, axis, model, opts,
                 ProgressTracker.Slice(progress, 0f, shrinkOther ? 0.85f : 1f), ct);
@@ -196,7 +326,7 @@ namespace Desqueeze.Core
                 grown.Metadata = source.Metadata != null ? source.Metadata.Clone() : new ImageMetadata();
                 return grown;
             }
-            var dst = source.CreateLike(width, height);
+            var dst = source.CreateLike(width, height, bitDepth);
             var reduceKernel = s.Algorithm == ResampleAlgorithm.EwaLanczosSharp
                 ? Kernels.For(ResampleAlgorithm.MagicKernelSharp2021)    // EWA is 2-D; use a separable kernel for this 1-D pass
                 : Kernels.For(s.Algorithm);

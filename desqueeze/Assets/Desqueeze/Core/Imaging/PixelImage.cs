@@ -98,7 +98,13 @@ namespace Desqueeze.Core.Imaging
         /// <summary>A new, blank image with the same channel layout, depth, format and a copy of the metadata.</summary>
         public PixelImage CreateLike(int width, int height)
         {
-            var img = new PixelImage(width, height, Channels, BitDepth);
+            return CreateLike(width, height, BitDepth);
+        }
+
+        /// <summary>A new, blank image with the same channel layout, format and a copy of the metadata, at <paramref name="bitDepth"/> (8 or 16).</summary>
+        public PixelImage CreateLike(int width, int height, int bitDepth)
+        {
+            var img = new PixelImage(width, height, Channels, bitDepth);
             img.Metadata = Metadata != null ? Metadata.Clone() : new ImageMetadata();
             img.SourceFormat = SourceFormat;
             return img;

@@ -70,6 +70,16 @@ namespace Desqueeze.App.UI
             "Always de-squeeze along the height of the image as it is shown.",
         };
 
+        private static readonly Desqueeze.Core.Lens.DistortionOrder[] OrderValues =
+            { Desqueeze.Core.Lens.DistortionOrder.AfterDesqueeze, Desqueeze.Core.Lens.DistortionOrder.BeforeDesqueeze, Desqueeze.Core.Lens.DistortionOrder.SinglePass };
+        private static readonly string[] OrderNames = { "After", "Before", "One pass" };
+        private static readonly string[] OrderTips =
+        {
+            "De-squeeze first (the detail widener sees the lens' own pixels), then correct the distortion at 16 bits. Measured best.",
+            "Correct the distortion on the squeezed capture, then de-squeeze. Measured about 1.5 dB worse: the widener then sees resampled pixels.",
+            "One resampling straight from the capture to the corrected output, with the warp kernel only (no detail widener).",
+        };
+
         private static readonly string[] LightNames = { "Linear", "Gamma", "Sigmoidal" };
         private static readonly LightSpace[] LightValues = { LightSpace.Linear, LightSpace.Gamma, LightSpace.Sigmoidal };
 
@@ -82,6 +92,9 @@ namespace Desqueeze.App.UI
 
         private readonly Action<Action> _defer;
         private readonly Action _onChanged;
+
+        /// <summary>Optional extra section drawn after the output size (the distortion controls). Returns true if a setting changed.</summary>
+        public Func<DesqueezeSettings, UiStyles, PixelImage, bool> DrawAfterGeometry;
 
         /// <param name="defer">Runs structural changes outside OnGUI (see DesqueezeApp.Defer).</param>
         /// <param name="onChanged">Called after a deferred change to the settings.</param>
@@ -277,22 +290,26 @@ namespace Desqueeze.App.UI
                 }
             }
 
+            // ---------------------------------------------------------------- distortion (drawn by the lens panel)
+            if (DrawAfterGeometry != null) changed |= DrawAfterGeometry(s, ui, image);
+
             // ---------------------------------------------------------------- widening method
             GUILayout.Label(vertical ? "STRETCHING (HEIGHT)" : "WIDENING", ui.Section);
             bool modelLoaded = Desqueeze.Core.Resampling.AxisSRModel.Default != null;
+            bool on = GUI.enabled;
             GUILayout.BeginHorizontal();
             for (int i = 0; i < WidenNames.Length; i++)
             {
                 var wm = WidenValues[i];
                 bool sel = s.Widen == wm;
                 bool available = modelLoaded || wm == WidenMethod.Kernel;
-                GUI.enabled = available && GUI.enabled;
+                GUI.enabled = available && on;
                 if (GUILayout.Button(new GUIContent(WidenNames[i], WidenTips[i]), sel ? ui.ButtonSelected : ui.Button) && !sel)
                 {
                     s.Widen = wm;
                     changed = true;
                 }
-                GUI.enabled = true;
+                GUI.enabled = on;
             }
             GUILayout.EndHorizontal();
             if (s.Widen != WidenMethod.Kernel && !modelLoaded)
@@ -347,6 +364,19 @@ namespace Desqueeze.App.UI
                     changed = true;
                 }
 
+                GUILayout.Label(new GUIContent("Distortion correction order", "When the lens profile corrects distortion. After the de-squeeze measured best."), ui.Label);
+                GUILayout.BeginHorizontal();
+                for (int i = 0; i < OrderValues.Length; i++)
+                {
+                    bool sel = s.DistortionOrder == OrderValues[i];
+                    if (GUILayout.Button(new GUIContent(OrderNames[i], OrderTips[i]), sel ? ui.ButtonSelected : ui.Button) && !sel)
+                    {
+                        s.DistortionOrder = OrderValues[i];
+                        changed = true;
+                    }
+                }
+                GUILayout.EndHorizontal();
+
                 if (GUILayout.Button(new GUIContent("Reset to defaults", "Restore the defaults from " + AppConfig.FileName), ui.Button))
                 {
                     _defer(() =>
@@ -360,6 +390,9 @@ namespace Desqueeze.App.UI
                         s.AntiRinging = d.AntiRinging;
                         s.Widen = d.Widen;
                         s.Direction = d.Direction;
+                        s.DistortionAmount = d.DistortionAmount;
+                        s.DistortionEdges = d.DistortionEdges;
+                        s.DistortionOrder = d.DistortionOrder;
                         _customMode = _cfg.PresetIndexOf(s.Factor) < 0;
                         SyncCustomText(s.Factor);
                         _onChanged();

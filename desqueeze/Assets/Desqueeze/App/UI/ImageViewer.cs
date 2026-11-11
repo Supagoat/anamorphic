@@ -182,6 +182,77 @@ namespace Desqueeze.App.UI
         public ImageLayer Layer => _layer;
         public int ZoomValue => _zoom;
 
+        /// <summary>A saved zoom level and position (see <see cref="Capture"/> / <see cref="Restore"/>).</summary>
+        internal struct ViewState
+        {
+            public int Zoom;
+            public double Cx, Cy;
+            public bool Valid;
+        }
+
+        public ViewState Capture()
+        {
+            return new ViewState { Zoom = _zoom, Cx = _cx, Cy = _cy, Valid = _layer != null };
+        }
+
+        /// <summary>Restores a saved view; call after <see cref="Show"/> of the layer it was captured on.</summary>
+        public void Restore(ViewState s)
+        {
+            if (!s.Valid || _layer == null) return;
+            _zoom = s.Zoom;
+            _cx = s.Cx;
+            _cy = s.Cy;
+            _fitPending = false;
+            ClampCentre();
+        }
+
+        /// <summary>View centre in image pixels (pixel edges at whole numbers).</summary>
+        public void GetCentre(out double x, out double y)
+        {
+            x = _cx;
+            y = _cy;
+        }
+
+        public void SetCentre(double x, double y)
+        {
+            _cx = x;
+            _cy = y;
+            ClampCentre();
+        }
+
+        /// <summary>Screen pixels per image pixel at the current zoom.</summary>
+        public double ScreenPixelsPerImagePixel => ScaleFactor;
+
+        /// <summary>
+        /// GUI position of an image point given in pixel-centre coordinates (pixel (0,0) is centred on (0,0)), as drawn by
+        /// the last <see cref="Draw"/> into <paramref name="view"/>.
+        /// </summary>
+        public bool ImageToGui(Rect view, double x, double y, out Vector2 gui)
+        {
+            gui = default(Vector2);
+            if (_layer == null) return false;
+            double ox, oy;
+            Origin(out ox, out oy);
+            double s = ScaleFactor;
+            float ppp = UiStyles.PixelsPerPoint;
+            gui = new Vector2((float)(view.x + (ox + (x + 0.5) * s) / ppp), (float)(view.y + (oy + (y + 0.5) * s) / ppp));
+            return true;
+        }
+
+        /// <summary>The image point (pixel-centre coordinates) under a GUI position; false if it is outside the image.</summary>
+        public bool GuiToImage(Rect view, Vector2 gui, out double x, out double y)
+        {
+            x = y = 0;
+            if (_layer == null) return false;
+            double ox, oy;
+            Origin(out ox, out oy);
+            double s = ScaleFactor;
+            float ppp = UiStyles.PixelsPerPoint;
+            x = ((gui.x - view.x) * ppp - ox) / s - 0.5;
+            y = ((gui.y - view.y) * ppp - oy) / s - 0.5;
+            return x >= -0.5 && y >= -0.5 && x <= _layer.Image.Width - 0.5 && y <= _layer.Image.Height - 0.5;
+        }
+
         public void SetMaxZoom(int max)
         {
             _maxZoom = Math.Max(1, max);

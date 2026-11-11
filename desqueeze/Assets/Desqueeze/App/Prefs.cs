@@ -63,6 +63,13 @@ namespace Desqueeze.App
             SqueezeDirection dir;
             if (Enum.TryParse(GetString("Direction", s.Direction.ToString()), out dir) && Enum.IsDefined(typeof(SqueezeDirection), dir))
                 s.Direction = dir;
+            s.DistortionAmount = GetDouble("DistortionAmount", s.DistortionAmount);
+            Desqueeze.Core.Lens.DistortionEdges edges;
+            if (Enum.TryParse(GetString("DistortionEdges", s.DistortionEdges.ToString()), out edges) && Enum.IsDefined(typeof(Desqueeze.Core.Lens.DistortionEdges), edges))
+                s.DistortionEdges = edges;
+            Desqueeze.Core.Lens.DistortionOrder order;
+            if (Enum.TryParse(GetString("DistortionOrder", s.DistortionOrder.ToString()), out order) && Enum.IsDefined(typeof(Desqueeze.Core.Lens.DistortionOrder), order))
+                s.DistortionOrder = order;
             try
             {
                 s.Validate();
@@ -84,6 +91,9 @@ namespace Desqueeze.App
             SetDouble("AntiRinging", s.AntiRinging);
             SetString("Widen", s.Widen.ToString());
             SetString("Direction", s.Direction.ToString());
+            SetDouble("DistortionAmount", s.DistortionAmount);
+            SetString("DistortionEdges", s.DistortionEdges.ToString());
+            SetString("DistortionOrder", s.DistortionOrder.ToString());
         }
 
         public static void LoadBatch(BatchOptions o, string defaultSuffix)

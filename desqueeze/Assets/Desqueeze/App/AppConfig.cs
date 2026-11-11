@@ -79,6 +79,13 @@ namespace Desqueeze.App
         /// <summary>Largest viewer magnification (integer).</summary>
         public int maxZoom = 64;
 
+        /// <summary>
+        /// Folder holding the lens profile library. Empty uses "Desqueeze Lens Profiles" in the user's Documents folder.
+        /// </summary>
+        public string lensProfileFolder = "";
+        /// <summary>After distortion correction: "AutoCrop" (crop to the pixels the photo covers) or "Uncropped".</summary>
+        public string distortionEdges = "AutoCrop";
+
         public static string FilePath => Path.Combine(Application.streamingAssetsPath, FileName);
 
         /// <summary>Loads the config file. Never throws: problems are reported in <paramref name="warning"/>.</summary>
@@ -172,6 +179,7 @@ namespace Desqueeze.App
                 ReduceLight = ParseLight(reduceLight, LightSpace.Gamma),
                 EnlargeLight = ParseLight(enlargeLight, LightSpace.Sigmoidal),
                 AntiRinging = antiRinging,
+                DistortionEdges = ParseEnum(distortionEdges, Desqueeze.Core.Lens.DistortionEdges.AutoCrop),
             };
         }
 

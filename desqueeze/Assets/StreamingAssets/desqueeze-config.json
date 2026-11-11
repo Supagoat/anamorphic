@@ -22,5 +22,8 @@
     "batchFileSuffix": "_desqueezed",
 
     "uiScale": 0,
-    "maxZoom": 64
+    "maxZoom": 64,
+
+    "lensProfileFolder": "",
+    "distortionEdges": "AutoCrop"
 }

@@ -58,6 +58,26 @@ namespace Desqueeze.Core.Imaging
         }
 
         /// <summary>
+        /// Where the point (<paramref name="x"/>, <paramref name="y"/>) of an image <paramref name="width"/> x
+        /// <paramref name="height"/> ends up in <c>Apply(image, orientation)</c> (pixel centres at whole numbers).
+        /// </summary>
+        public static void MapPoint(int orientation, int width, int height, double x, double y, out double ox, out double oy)
+        {
+            double w1 = width - 1, h1 = height - 1;
+            switch (orientation)
+            {
+                case MirrorHorizontal: ox = w1 - x; oy = y; break;
+                case Rotate180: ox = w1 - x; oy = h1 - y; break;
+                case MirrorVertical: ox = x; oy = h1 - y; break;
+                case Transpose: ox = y; oy = x; break;
+                case Rotate90Clockwise: ox = h1 - y; oy = x; break;
+                case Transverse: ox = h1 - y; oy = w1 - x; break;
+                case Rotate90CounterClockwise: ox = y; oy = w1 - x; break;
+                default: ox = x; oy = y; break;
+            }
+        }
+
+        /// <summary>
         /// Returns <paramref name="src"/> transformed as <paramref name="orientation"/> prescribes, i.e. the image as it
         /// should be displayed. Orientation 1 or an invalid value returns <paramref name="src"/> itself.
         /// </summary>

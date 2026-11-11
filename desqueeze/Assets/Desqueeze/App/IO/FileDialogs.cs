@@ -57,6 +57,30 @@ namespace Desqueeze.App.IO
 #endif
         }
 
+        /// <summary>Chooses a lens profile (.json) to import.</summary>
+        public static Task<string> OpenProfileAsync(string title, string startDir)
+        {
+#if UNITY_EDITOR
+            string p = UnityEditor.EditorUtility.OpenFilePanelWithFilters(title, ExistingDir(startDir) ?? "",
+                new[] { "Lens profiles", "json,JSON" });
+            return Task.FromResult(string.IsNullOrEmpty(p) ? null : p);
+#else
+            return RunExternalAsync("openprofile", title, ExistingDir(startDir), null, SaveFormat.Jpeg);
+#endif
+        }
+
+        /// <summary>Chooses where to export a lens profile (.json).</summary>
+        public static Task<string> SaveProfileAsync(string title, string startDir, string defaultName)
+        {
+#if UNITY_EDITOR
+            string p = UnityEditor.EditorUtility.SaveFilePanel(title, ExistingDir(startDir) ?? "",
+                Path.GetFileNameWithoutExtension(defaultName), "json");
+            return Task.FromResult(string.IsNullOrEmpty(p) ? null : p);
+#else
+            return RunExternalAsync("saveprofile", title, ExistingDir(startDir), defaultName, SaveFormat.Jpeg);
+#endif
+        }
+
         /// <summary>True when a native dialog can be shown on this platform.</summary>
         public static bool Available
         {
@@ -124,6 +148,12 @@ try
 		else
 			set f to choose file with prompt p of type {""public.jpeg"", ""public.png""} default location (POSIX file d as alias)
 		end if
+	else if k is ""openprofile"" then
+		if d is """" then
+			set f to choose file with prompt p of type {""public.json"", ""json""}
+		else
+			set f to choose file with prompt p of type {""public.json"", ""json""} default location (POSIX file d as alias)
+		end if
 	else if k is ""folder"" then
 		if d is """" then
 			set f to choose folder with prompt p
@@ -174,17 +204,17 @@ if ($kind -eq 'folder') {
   $d.Description = $prompt
   if ($dir) { $d.SelectedPath = $dir }
   if ($d.ShowDialog($owner) -eq 'OK') { [Console]::Out.Write($d.SelectedPath) }
-} elseif ($kind -eq 'open') {
+} elseif ($kind -eq 'open' -or $kind -eq 'openprofile') {
   $d = New-Object System.Windows.Forms.OpenFileDialog
   $d.Title = $prompt
-  $d.Filter = 'Images (*.jpg;*.jpeg;*.png)|*.jpg;*.jpeg;*.png'
+  if ($kind -eq 'open') { $d.Filter = 'Images (*.jpg;*.jpeg;*.png)|*.jpg;*.jpeg;*.png' } else { $d.Filter = 'Lens profiles (*.json)|*.json' }
   if ($dir) { $d.InitialDirectory = $dir }
   if ($d.ShowDialog($owner) -eq 'OK') { [Console]::Out.Write($d.FileName) }
 } else {
   $d = New-Object System.Windows.Forms.SaveFileDialog
   $d.Title = $prompt
-  $d.Filter = 'JPEG (*.jpg)|*.jpg|PNG (*.png)|*.png'
-  $d.FilterIndex = [int]$env:DESQ_FILTER
+  if ($kind -eq 'saveprofile') { $d.Filter = 'Lens profiles (*.json)|*.json'; $d.DefaultExt = 'json' }
+  else { $d.Filter = 'JPEG (*.jpg)|*.jpg|PNG (*.png)|*.png'; $d.FilterIndex = [int]$env:DESQ_FILTER }
   $d.FileName = $env:DESQ_NAME
   if ($dir) { $d.InitialDirectory = $dir }
   if ($d.ShowDialog($owner) -eq 'OK') { [Console]::Out.Write($d.FileName) }
@@ -217,9 +247,9 @@ if ($kind -eq 'folder') {
                 sb.Append(" --directory");
                 if (dir != null) sb.Append(" --filename=").Append(Quote(dir + "/"));
             }
-            else if (kind == "open")
+            else if (kind == "open" || kind == "openprofile")
             {
-                sb.Append(" --file-filter=").Append(Quote("Images | *.jpg *.jpeg *.png *.JPG *.JPEG *.PNG"));
+                sb.Append(" --file-filter=").Append(Quote(kind == "open" ? "Images | *.jpg *.jpeg *.png *.JPG *.JPEG *.PNG" : "Lens profiles | *.json *.JSON"));
                 if (dir != null) sb.Append(" --filename=").Append(Quote(dir + "/"));
             }
             else

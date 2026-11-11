@@ -58,6 +58,13 @@ namespace Desqueeze.App
             GUILayout.Label("BATCH DE-SQUEEZE", ui.Title);
             GUILayout.Label("Every .jpg/.jpeg/.png in the input folder is de-squeezed with the settings on the right " +
                             "and written to the output folder in its original format (JPEG at maximum quality).", ui.MutedSmall);
+            var lens = _app.Lenses;
+            var dist = _app.Settings.ActiveDistortion();
+            GUILayout.Label("Lens: " + (lens.HasProfile ? "\"" + lens.DisplayName + "\"" + (lens.Modified ? " (unsaved changes)" : "") : "no profile") +
+                            "  ·  factor " + _app.Settings.Factor.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + "x  ·  " +
+                            (dist == null ? "no distortion correction"
+                                : "distortion corrected at " + (_app.Settings.DistortionAmount * 100).ToString("0", System.Globalization.CultureInfo.InvariantCulture) + "%, " +
+                                  (_app.Settings.DistortionEdges == Desqueeze.Core.Lens.DistortionEdges.AutoCrop ? "auto-cropped" : "uncropped")), ui.Label);
 
             bool changed = false;
             changed |= FolderRow(ui, "INPUT FOLDER", ref _options.InputFolder, "Choose the folder of images to process");

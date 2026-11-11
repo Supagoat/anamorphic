@@ -105,9 +105,37 @@ namespace Desqueeze.Core
         /// </summary>
         public float AntiRinging = 0f;
 
+        /// <summary>
+        /// Lens distortion to correct, measured in the sensor's orientation (see <see cref="Lens.DistortionModel"/>);
+        /// null or identity for none. Usually comes from the active lens profile.
+        /// </summary>
+        public Lens.DistortionModel Distortion;
+
+        /// <summary>How much of <see cref="Distortion"/> to correct: 0 = none, 1 = as measured, up to 2.</summary>
+        public double DistortionAmount = 1;
+
+        /// <summary>Crop the corrected picture to the pixels the source covers, or keep everything it shows.</summary>
+        public Lens.DistortionEdges DistortionEdges = Lens.DistortionEdges.AutoCrop;
+
+        /// <summary>
+        /// Where the correction happens. De-squeezing first measured best (see README): the detail widener works on
+        /// the captured pixels, and the warp then resamples an image that is already full resolution on both axes.
+        /// </summary>
+        public Lens.DistortionOrder DistortionOrder = Lens.DistortionOrder.AfterDesqueeze;
+
+        /// <summary>The distortion scaled by <see cref="DistortionAmount"/>, or null when nothing is to be corrected.</summary>
+        public Lens.DistortionModel ActiveDistortion()
+        {
+            if (Distortion == null || Distortion.IsIdentity || !(DistortionAmount > 0)) return null;
+            var m = Distortion.Scaled(DistortionAmount);
+            return m.IsIdentity ? null : m;
+        }
+
         public DesqueezeSettings Clone()
         {
-            return (DesqueezeSettings)MemberwiseClone();
+            var c = (DesqueezeSettings)MemberwiseClone();
+            c.Distortion = Distortion != null ? Distortion.Clone() : null;
+            return c;
         }
 
         public void Validate()
@@ -120,6 +148,8 @@ namespace Desqueeze.Core
             if (float.IsNaN(AntiRinging)) AntiRinging = 0;
             if (AntiRinging < 0) AntiRinging = 0;
             if (AntiRinging > 1) AntiRinging = 1;
+            if (double.IsNaN(DistortionAmount) || DistortionAmount < 0) DistortionAmount = 0;
+            if (DistortionAmount > 2) DistortionAmount = 2;
         }
 
         public override string ToString()
@@ -127,7 +157,9 @@ namespace Desqueeze.Core
             return "factor " + Factor.ToString("0.###") + ", width share " + WidthShare.ToString("0.###") +
                    ", " + Algorithm + ", widen " + Widen + ", direction " + Direction +
                    ", reduce " + ReduceLight + ", enlarge " + EnlargeLight +
-                   (AntiRinging > 0 ? ", AR " + AntiRinging.ToString("0.##") : "");
+                   (AntiRinging > 0 ? ", AR " + AntiRinging.ToString("0.##") : "") +
+                   (ActiveDistortion() != null ? ", distortion " + Distortion + " x" + DistortionAmount.ToString("0.##") +
+                       " " + DistortionEdges + " " + DistortionOrder : "");
         }
     }
 }
