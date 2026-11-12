@@ -225,7 +225,7 @@ namespace Desqueeze.Core.Resampling
                 }
                 if (work == LightSpace.Sigmoidal)
                 {
-                    if (alpha) RowCodec.ConvertWithAlpha(row, 0, outW, ch, LightSpace.Sigmoidal, LightSpace.Linear);
+                    if (alpha) RowCodec.ConvertWithAlpha(row, 0, outW * ch, ch, LightSpace.Sigmoidal, LightSpace.Linear);
                     else RowCodec.Convert(row, 0, row.Length, LightSpace.Sigmoidal, LightSpace.Linear);
                 }
                 RowCodec.Encode(row, 0, dst, y, work == LightSpace.Gamma ? LightSpace.Gamma : LightSpace.Linear);
