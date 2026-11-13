@@ -12,7 +12,9 @@ namespace Desqueeze.Core.Lens
     /// {
     ///   "format": "desqueeze-lens-profile", "formatVersion": 1,
     ///   "name": "...", "squeezeFactor": 1.54, "notes": "", "created": "...", "modified": "...",
-    ///   "distortion": { "kx": [k1, k2, k3], "ky": [k1, k2, k3], "kind": "...", "rms": 0.9 } | null,
+    ///   "distortion": { "kx": [k1, k2, k3], "ky": [k1, k2, k3],
+    ///                   "terms": [ { "i": 1, "j": 2, "x": -0.02, "y": 0 }, ... ],      (optional: general terms x^i y^j)
+    ///                   "kind": "...", "rms": 0.9 } | null,
     ///   "calibration": { "imageWidth": 6000, "imageHeight": 4000, "factor": 1.54, "sourceImage": "...",
     ///                    "lines": [ { "orientation": "horizontal", "points": [[x, y], ...] } ] } | null
     /// }
@@ -23,7 +25,8 @@ namespace Desqueeze.Core.Lens
     public static class LensProfileJson
     {
         public const string Format = "desqueeze-lens-profile";
-        public const int FormatVersion = 1;
+        /// <summary>2 added the general terms; a profile without them is written as version 1, which older versions read.</summary>
+        public const int FormatVersion = 2;
         public const string FileExtension = ".json";
 
         // ============================================================================ writing
@@ -34,7 +37,7 @@ namespace Desqueeze.Core.Lens
             var sb = new StringBuilder();
             sb.Append("{\n");
             Prop(sb, 1, "format", Str(Format), true);
-            Prop(sb, 1, "formatVersion", FormatVersion.ToString(CultureInfo.InvariantCulture), true);
+            Prop(sb, 1, "formatVersion", (p.Distortion != null && p.Distortion.HasTerms ? FormatVersion : 1).ToString(CultureInfo.InvariantCulture), true);
             Prop(sb, 1, "name", Str(p.name ?? ""), true);
             Prop(sb, 1, "squeezeFactor", Num(p.squeezeFactor), true);
             Prop(sb, 1, "notes", Str(p.notes ?? ""), true);
@@ -50,6 +53,20 @@ namespace Desqueeze.Core.Lens
                 sb.Append("  \"distortion\": {\n");
                 Prop(sb, 2, "kx", NumArray(d.Kx), true);
                 Prop(sb, 2, "ky", NumArray(d.Ky), true);
+                if (d.HasTerms)
+                {
+                    sb.Append("    \"terms\": [");
+                    bool first = true;
+                    foreach (var t in d.Terms)
+                    {
+                        if (t.X == 0 && t.Y == 0) continue;
+                        sb.Append(first ? "\n" : ",\n");
+                        first = false;
+                        sb.Append("      { \"i\": ").Append(t.I.ToString(CultureInfo.InvariantCulture)).Append(", \"j\": ").Append(t.J.ToString(CultureInfo.InvariantCulture))
+                            .Append(", \"x\": ").Append(Num(t.X)).Append(", \"y\": ").Append(Num(t.Y)).Append(" }");
+                    }
+                    sb.Append("\n    ],\n");
+                }
                 Prop(sb, 2, "kind", Str(p.distortionKind ?? ""), true);
                 Prop(sb, 2, "rms", Num(p.distortionRms), false);
                 sb.Append("  },\n");
@@ -175,6 +192,23 @@ namespace Desqueeze.Core.Lens
                 var m = new DistortionModel();
                 ReadCoefficients(d, "kx", m.Kx);
                 ReadCoefficients(d, "ky", m.Ky);
+                var terms = Get(d, "terms") as List<object>;
+                if (terms != null)
+                {
+                    var list = new List<DistortionTerm>();
+                    foreach (var to in terms)
+                    {
+                        var t = to as Dictionary<string, object>;
+                        if (t == null) throw new FormatException("A distortion term is not an object.");
+                        double ti = GetNumber(t, "i", -1), tj = GetNumber(t, "j", -1), tx = GetNumber(t, "x", 0), ty = GetNumber(t, "y", 0);
+                        if (ti != Math.Floor(ti) || tj != Math.Floor(tj) || ti < 0 || tj < 0 || ti + tj < 2 || ti + tj > DistortionModel.MaxDegree)
+                            throw new FormatException("A distortion term has powers out of range (x^" + ti + " y^" + tj + ").");
+                        if (double.IsNaN(tx) || double.IsNaN(ty) || Math.Abs(tx) > 1000 || Math.Abs(ty) > 1000)
+                            throw new FormatException("A distortion term's coefficient is out of range.");
+                        list.Add(new DistortionTerm((int)ti, (int)tj, tx, ty));
+                    }
+                    m.Terms = list.ToArray();
+                }
                 p.distortion = m;
                 p.hasDistortion = !m.IsIdentity;
                 p.distortionKind = GetString(d, "kind", "");

@@ -149,9 +149,10 @@ photos.
 
 ## Distortion correction
 
-Lenses bend straight lines: outwards towards the edges (barrel distortion), inwards (pincushion), or both
-(moustache). Anamorphic lenses can bend horizontal and vertical lines by different amounts. The app measures this
-from a photo and straightens it while de-squeezing.
+Lenses bend straight lines, and anamorphic lenses do it in complicated ways: horizontal and vertical lines by
+different amounts, a line bowing one way in the middle of the frame and the other way at its sides, bending that
+isn't the same left and right. The app assumes no particular shape. You mark points along lines that should be
+straight, it works out whatever correction makes them straight, and it applies that while de-squeezing.
 
 ### Measuring it
 
@@ -163,7 +164,12 @@ from a photo and straightens it while de-squeezing.
    reality**, from one end to the other. 5-10 points spread along it are plenty. **Enter** (or **Finish line**)
    ends the line.
 4. **Add as many lines as you like.** Long lines near the top, bottom, left and right edges measure the most. A
-   line needs at least 3 points to count.
+   line needs at least 3 points to count. Where a line changes the way it bends, give it more points (10-15), so
+   its shape is pinned down.
+   * Mark **both horizontal and vertical lines**. Each kind measures one half of the distortion. With only one
+     kind, the other half is assumed to mirror it.
+   * **A few steep diagonals help too**, if the scene has any (start them as horizontal lines). Level and upright
+     lines can't show everything a lens does (see [what lines can't show](#what-lines-cant-show)).
 5. **Fix points** as needed:
    * Drag a point to move it, or select it and nudge it with the arrow keys (0.25 px, Shift for 2 px).
    * **Delete** removes the selected point. **Shift+Delete** (or **Delete line**) removes its line. Clicking a point
@@ -173,7 +179,7 @@ from a photo and straightens it while de-squeezing.
 6. With **Snap** on (the default), each point moves onto the nearest edge to a fraction of a pixel. All of a
    line's points stay on the same side of a mortar joint or frame.
 
-After every change the distortion is fitted again, which takes about 20-50 ms. The overlay shows:
+After every change the distortion is fitted again, in the background (a fraction of a second). The overlay shows:
 * the points: blue for horizontal lines, orange for vertical ones;
 * **green curves** showing where the measured lens puts a straight line through each line's points. When the fit
   is good, the points sit on them;
@@ -187,51 +193,98 @@ The result goes into the lens profile (an untitled one is created if there was n
 
 ### Applying it
 
-The **DISTORTION CORRECTION** section of the panel appears when the profile has a measurement:
+The **LENS DISTORTION** section of the panel appears when the profile has a measurement. It says how far the lens
+bends lines (as a share of the frame width) and what it was measured from.
 
-* **Amount** is 0-150%. At 100% the lines are straight; less keeps some of the lens' character.
+* **Distortion Correction** is the strength, 0-150%. At 100% the lines you marked come out straight. Less keeps
+  some of the lens' character, 0% turns the correction off, and more than 100% over-corrects.
 * **Auto-crop** gives the largest rectangle, of the photo's shape, that the corrected picture fills completely.
   **Uncropped** keeps every pixel of the photo, and the parts of the frame it no longer reaches are black
-  (transparent in PNGs with alpha). Barrel correction leaves those gaps at the middle of each edge.
+  (transparent in PNGs with alpha). Where those gaps fall depends on the lens: at the middle of the edges when it
+  pushes the corners outwards, in the corners when it pulls them in.
 * The corrected size is shown. The output keeps the de-squeezed resolution at the centre of the frame, where the
-  lens is sharpest. A barrel-corrected, auto-cropped image therefore comes out slightly larger than a plain
-  de-squeeze (12281 x 5319 instead of 12246 x 5304 for the example profile), and no detail at the centre is
-  thrown away.
+  lens is sharpest. An auto-cropped image can therefore come out slightly larger than a plain de-squeeze
+  (12281 x 5319 instead of 12246 x 5304 for the example profile), and no detail at the centre is thrown away.
 * **Advanced > Distortion correction order** chooses when the correction happens: **Together** with the de-squeeze
   (the default, see below), **Before** it, or in **One pass** from the capture.
 
 ### How it works
 
 **The model.** Coordinates are normalised so that x runs from -1 to 1 across the de-squeezed width, with the same
-units vertically:
+units vertically. The lens puts the point that belongs at (xu, yu) at:
 
 ```
-xd = xu (1 + kx1 r² + kx2 r⁴ + kx3 r⁶)
-yd = yu (1 + ky1 r² + ky2 r⁴ + ky3 r⁶),     r² = xu² + yu²
+xd = xu (1 + kx1 r² + kx2 r⁴ + kx3 r⁶) + Σ Xij xu^i yu^j
+yd = yu (1 + ky1 r² + ky2 r⁴ + ky3 r⁶) + Σ Yij xu^i yu^j,     r² = xu² + yu²
 ```
 
-* Equal x and y coefficients are the classic radial (Brown-Conrady) model. Separate ones describe anamorphic lenses.
+* The first part is the usual radial model, with its own coefficients for each axis.
+* The sums are **general terms**: any powers of x and y from 2nd to 7th degree, each with its own coefficient for
+  the horizontal and the vertical displacement. They describe what the radial part can't:
+  * the terms a centred lens can have, `x (a x² + b y² + c x⁴ + d x² y² + e y⁴ ...)` and the same for y. This is
+    the form film work uses for anamorphic lenses. It covers lines that bow one way in the middle and the other
+    way at the sides, and bending that differs along the two axes in any way;
+  * the rest, which is not symmetric about the centre (a decentred or tilted element, a "smile").
 * The centre is fixed, so its scale is unchanged.
-* The model is mirror-symmetric, so it doesn't matter which way the camera was turned for a portrait shot.
 * Points are measured on the photo as shown and stored in the sensor's own orientation, the frame the de-squeeze
   works in.
 * Because x is relative to the width, a profile fits any resolution of the same frame.
+* Profiles made before the general terms existed load unchanged.
 
 **The fit** (the plumb-line method):
 1. The coefficients are chosen so that, once corrected, each line's points lie on a straight line: Levenberg-
-   Marquardt on the perpendicular distances to each line's best total-least-squares line.
+   Marquardt on the perpendicular distances to each line, with exact derivatives.
 2. Huber weighting means one misplaced point barely moves the result. In the tests, a point 25 px off changed the
    correction by under 1 px.
-3. The model is picked by the data (Bayesian information criterion), from:
-   * radial, 1st order;
-   * radial, 2nd order;
-   * separate horizontal and vertical, 1st order;
-   * separate horizontal and vertical, 2nd order.
-4. A direction only gets its own coefficient when its lines are long and reach towards the edges. Otherwise short
-   lines would extrapolate wildly into the corners, which the first real test did until this check was added.
+3. **The model is as simple as the points allow and as complex as they demand.** Eleven candidates are fitted,
+   from one radial coefficient up to every term of 7th degree, and the data picks one (Bayesian information
+   criterion). A plain lens still gets the plain radial model. General terms are used only when the lines show
+   what they describe. The status bar names the model that won.
+4. A candidate needs enough points: two (beyond the first two of each line) for each of its terms.
 
-On synthetic lines with 0.25 px of noise, the fit recovers barrel, pincushion and anamorphic lenses to within
-0.1-0.7 px everywhere in a 9000-px-wide frame.
+#### What lines can't show
+
+A horizontal line stays straight whatever the lens does to the spacing of points along it, and however it shifts
+or tilts the line as a whole. So level lines can't see part of the vertical displacement (the terms with x to a
+power below 2), and upright lines can't see the matching part of the horizontal one. Those hidden terms don't
+bend level or upright lines, but they decide whether **diagonals** come out straight.
+
+The fit doesn't leave them to chance:
+* Each hidden term is tied to the value the radial pattern implies from the terms the lines do show. The x³ term
+  of the horizontal displacement equals its x y² term, as it does for any radial distortion, and likewise up the
+  orders.
+* Hidden terms with no radial counterpart are held at zero.
+* Lines at other angles can move them. That is why a few diagonals help.
+
+#### What was measured
+
+Eight simulated lenses, 6000 x 4000 at 1.5x, with 0.4 px of marking noise: seven horizontal and seven vertical
+lines of 13 points each. The figure is how far straight lines of the scene still bend after correction (the
+largest deviation of each line, RMS over lines across the whole frame), in pixels of the 9000-px-wide result.
+"Before" is the previous version, which had only the radial models.
+
+| Lens | Level and upright lines: before | now | Diagonals: before | now |
+|---|---|---|---|---|
+| Radial (barrel) | 0.08 | 0.05 | 0.13 | 0.03 |
+| Anamorphic (different on each axis) | 0.09 | 0.09 | 0.26 | 0.26 |
+| Radial, changing direction towards the edges | 0.07 | 0.07 | 0.06 | 0.06 |
+| Horizontals bow out, verticals bow in | 0.09 | 0.09 | 0.18 | 0.18 |
+| **Bows out in the centre, in at the sides** | 4.41 | **0.20** | 2.97 | 4.28 |
+| **Decentred** | 6.69 | **0.80** | 3.98 | 2.50 |
+| **Anamorphic with a "smile"** | 13.86 | **0.25** | 3.81 | 0.77 |
+| **Not a polynomial at all** | 7.93 | **1.62** | 6.45 | 11.88 |
+
+* Lenses the radial models describe are fitted exactly as before.
+* On the complex lenses, the lines of the kinds you marked now come out straight to a fraction of a pixel, where
+  the radial models left 4-14 px.
+* **Diagonals are a mixed result** when only level and upright lines are marked: better on two of the complex
+  lenses, worse on two. Those lenses were built with hidden parts that don't follow the radial pattern, and
+  nothing in the marked lines can reveal them.
+* With **six diagonal lines added**, the mean over the eight lenses is 0.44 px for level and upright lines and
+  0.45 px for diagonals.
+* With fewer lines the gain is smaller: three horizontal and three vertical lines give a mean of 3.6 px where
+  the radial models gave 6.5.
+* Reproduce with `Tools/Bench`, command `fit-exp`.
 
 **The correction happens inside the de-squeeze**, as two 1-D passes (a separable warp, after Catmull and Smith):
 1. **Rows.** Each row of the capture is widened by the Detail reconstruction. It samples exactly where the corrected
@@ -257,8 +310,8 @@ It differs in three ways:
 * **The Lanczos kernel is separable** (x and y) instead of radial. A radial sinc doesn't vanish at the diagonal
   neighbours, so it blurs even where nothing moves. It scored 1.6-3.9 dB lower (below). The separable kernel
   reproduces the image exactly where the correction is zero.
-* **The footprint widens where the correction shrinks the image**, following the local Jacobian, so pincushion
-  corrections don't alias. The boundary of the photo is anti-aliased against the background.
+* **The footprint widens where the correction shrinks the image**, following the local Jacobian, so it doesn't
+  alias there. The boundary of the photo is anti-aliased against the background.
 
 Both keep 16 bits between passes, and both are multi-threaded. On a 2-core machine, correcting a 42 MP capture adds
 about 2 s at the balanced split and 5 s at width only to the de-squeeze. On a modern Mac it is a fraction of that.

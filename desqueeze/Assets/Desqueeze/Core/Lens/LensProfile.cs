@@ -12,7 +12,7 @@ namespace Desqueeze.Core.Lens
     public sealed class LensProfile
     {
         public string format = "desqueeze-lens-profile";
-        public int formatVersion = 1;
+        public int formatVersion = LensProfileJson.FormatVersion;
         public string name = "New lens";
         public double squeezeFactor = 1.5;
         public string notes = "";
@@ -54,9 +54,7 @@ namespace Desqueeze.Core.Lens
             if (o == null) return false;
             if (Math.Abs(squeezeFactor - o.squeezeFactor) > 1e-9 || hasDistortion != o.hasDistortion) return false;
             if (!hasDistortion) return true;
-            for (int i = 0; i < 3; i++)
-                if (Math.Abs(distortion.Kx[i] - o.distortion.Kx[i]) > 1e-12 || Math.Abs(distortion.Ky[i] - o.distortion.Ky[i]) > 1e-12) return false;
-            return true;
+            return distortion.SameAs(o.distortion, 1e-12);
         }
 
         /// <summary>

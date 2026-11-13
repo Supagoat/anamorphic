@@ -27,6 +27,7 @@ namespace DesqueezeBench
                 switch (args[0])
                 {
                     case "selftest": return SelfTest();
+                    case "viewtest": ViewTests(); return s_fail == 0 ? 0 : 1;
                     case "resize": return Resize(args);
                     case "batch": return Batch(args[1]);
                     case "desqueeze": return DesqueezeCmd(args);
@@ -40,6 +41,7 @@ namespace DesqueezeBench
                     case "upright": return UprightCmd(args);
                     case "circle-list": return CircleListCmd(args);
                     case "distortion-fit": return DistortionFitCmd(args);
+                    case "fit-exp": return FitExperimentCmd(args);
                     case "lens-exp": return LensExperimentCmd(args);
                     case "lens-profile": return LensProfileCmd(args);
                     case "lens-apply": return LensApplyCmd(args);
@@ -475,6 +477,227 @@ namespace DesqueezeBench
             return 0;
         }
 
+        // ------------------------------------------------------------------------------------------- fit experiment
+
+        private delegate void Lens(double xu, double yu, out double xd, out double yd);
+
+        private sealed class FitScenario
+        {
+            public string Name;
+            public Lens Lens;
+        }
+
+        private static List<FitScenario> FitScenarios(double hh)
+        {
+            var list = new List<FitScenario>();
+            Func<string, Desqueeze.Core.Lens.DistortionModel, FitScenario> fromModel = (n, m) => new FitScenario { Name = n, Lens = (double x, double y, out double xd, out double yd) => m.Distort(x, y, out xd, out yd) };
+            list.Add(fromModel("radial barrel", Model(-0.03, -0.03)));
+            list.Add(fromModel("anamorphic barrel", Model(-0.04, -0.012)));
+            list.Add(fromModel("radial moustache", Model(-0.06, -0.06, 0.05, 0.05)));
+            list.Add(fromModel("H barrel, V pincushion", Model(0.02, -0.03)));
+            list.Add(new FitScenario { Name = "barrel centre, pincushion sides", Lens = (double x, double y, out double xd, out double yd) =>
+            {
+                xd = x * (1 - 0.02 * x * x - 0.02 * y * y);
+                yd = y * (1 - 0.05 * x * x + 0.07 * x * x * x * x - 0.01 * y * y);
+            } });
+            list.Add(new FitScenario { Name = "decentred barrel", Lens = (double x, double y, out double xd, out double yd) =>
+            {
+                double ax = x - 0.10, ay = y + 0.06, r2 = ax * ax + ay * ay;
+                xd = x - 0.04 * ax * r2;
+                yd = y - 0.04 * ay * r2;
+            } });
+            list.Add(new FitScenario { Name = "anamorphic + smile", Lens = (double x, double y, out double xd, out double yd) =>
+            {
+                double r2 = x * x + y * y;
+                xd = x * (1 - 0.04 * r2);
+                yd = y * (1 - 0.012 * r2) + 0.006 * x * x;
+            } });
+            list.Add(new FitScenario { Name = "not a polynomial", Lens = (double x, double y, out double xd, out double yd) =>
+            {
+                double r2 = x * x + y * y;
+                xd = x / (1 + 0.05 * r2) + 0.003 * Math.Sin(2.5 * y / hh) * x;
+                yd = y / (1 + 0.02 * r2) + 0.004 * Math.Sin(3 * x) * y / hh;
+            } });
+            return list;
+        }
+
+        /// <summary>Points along straight world lines as the lens draws them, in pixels, with marking noise.</summary>
+        private static List<Desqueeze.Core.Lens.CalibrationLine> MarkedLines(Lens lens, string layout, int w, int h, double f, double noise, int seed)
+        {
+            var frame = new Desqueeze.Core.Lens.LensFrame(w, h, f);
+            double hh = frame.HalfHeight;
+            var rnd = new Random(seed);
+            Func<double> gauss = () => Math.Sqrt(-2 * Math.Log(1 - rnd.NextDouble())) * Math.Cos(2 * Math.PI * rnd.NextDouble());
+            var lines = new List<Desqueeze.Core.Lens.CalibrationLine>();
+            double[] offsets;
+            int pts;
+            double reach = 1.15, tilt = 4;
+            bool wantH = true, wantV = true;
+            switch (layout)
+            {
+                case "grid": offsets = new[] { -0.9, -0.6, -0.3, 0, 0.3, 0.6, 0.9 }; pts = 13; break;
+                case "sparse": offsets = new[] { -0.8, 0, 0.8 }; pts = 9; break;
+                case "h-only": offsets = new[] { -0.9, -0.45, 0, 0.45, 0.9 }; pts = 11; wantV = false; break;
+                case "central": offsets = new[] { -0.45, -0.15, 0.15, 0.45 }; pts = 9; reach = 0.55; break;
+                case "level": offsets = new[] { -0.9, -0.6, -0.3, 0, 0.3, 0.6, 0.9 }; pts = 13; tilt = 0; break;
+                case "diag": offsets = new[] { -0.9, -0.6, -0.3, 0, 0.3, 0.6, 0.9 }; pts = 13; break;
+                case "few": offsets = new[] { -0.75, 0.75 }; pts = 11; break;
+                case "two-h": offsets = new[] { -0.8, 0.7 }; pts = 12; wantV = false; break;
+                default: throw new ArgumentException(layout);
+            }
+            foreach (bool horiz in new[] { true, false })
+            {
+                if (horiz && !wantH || !horiz && !wantV) continue;
+                foreach (double c in offsets)
+                {
+                    double slope = Math.Tan((rnd.NextDouble() * 2 - 1) * tilt * Math.PI / 180);
+                    var l = new Desqueeze.Core.Lens.CalibrationLine { orientation = horiz ? "horizontal" : "vertical" };
+                    for (int i = 0; i < pts; i++)
+                    {
+                        double t = (-1 + 2.0 * i / (pts - 1)) * reach;
+                        double xu = horiz ? t : c + slope * t * hh, yu = horiz ? c * hh + slope * t : t * hh;
+                        double xd, yd, px, py;
+                        lens(xu, yu, out xd, out yd);
+                        if (Math.Abs(xd) > 0.985 || Math.Abs(yd) > hh * 0.985) continue;
+                        frame.ToPixel(xd, yd, out px, out py);
+                        l.points.Add(new Desqueeze.Core.Lens.LinePoint(px + noise * gauss(), py + noise * gauss()));
+                    }
+                    if (l.points.Count >= 3) lines.Add(l);
+                }
+            }
+            if (layout == "diag")
+            {
+                // six lines across the frame at steep angles, marked like horizontal ones
+                foreach (double deg in new[] { 33.0, -33, 24, -24 })
+                    foreach (double off in new[] { -0.45, 0.45 })
+                    {
+                        if (Math.Abs(deg) < 30 && off > 0) continue;
+                        double dx = Math.Cos(deg * Math.PI / 180), dy = Math.Sin(deg * Math.PI / 180);
+                        var l = new Desqueeze.Core.Lens.CalibrationLine { orientation = "horizontal" };
+                        for (int i = 0; i < 15; i++)
+                        {
+                            double t = (-1 + 2.0 * i / 14) * 1.3, xu = -dy * off * hh + t * dx, yu = dx * off * hh + t * dy, xd, yd, px, py;
+                            lens(xu, yu, out xd, out yd);
+                            if (Math.Abs(xd) > 0.985 || Math.Abs(yd) > hh * 0.985) continue;
+                            frame.ToPixel(xd, yd, out px, out py);
+                            l.points.Add(new Desqueeze.Core.Lens.LinePoint(px + noise * gauss(), py + noise * gauss()));
+                        }
+                        if (l.points.Count >= 3) lines.Add(l);
+                    }
+            }
+            return lines;
+        }
+
+        /// <summary>
+        /// How straight a correction makes the world: straight lines at many positions and angles are drawn through the
+        /// lens, corrected with <paramref name="m"/>, and measured against the straight line through them. Returns the RMS and
+        /// the largest of the lines' greatest deviations, in de-squeezed pixels.
+        /// </summary>
+        private static void Straightness(Lens lens, Desqueeze.Core.Lens.DistortionModel m, double hh, double pxPerUnit, out double rms, out double worst, int which = 0)
+        {
+            double ss = 0;
+            int n = 0;
+            worst = 0;
+            foreach (double deg in which == 1 ? new[] { 0.0, 90 } : which == 2 ? new[] { 30.0, -30, 60, -60, 45, -45 } : new[] { 0.0, 90, 30, -30, 60, -60, 12, -78 })
+            {
+                double dx = Math.Cos(deg * Math.PI / 180), dy = Math.Sin(deg * Math.PI / 180);
+                for (int k = -6; k <= 6; k++)
+                {
+                    // offset along the normal, spanning the frame
+                    double span = Math.Abs(-dy) * 1 + Math.Abs(dx) * hh;
+                    double off = k / 6.5 * span;
+                    double ox = -dy * off, oy = dx * off;
+                    var pts = new List<double[]>();
+                    for (int i = -60; i <= 60; i++)
+                    {
+                        double t = i / 60.0 * 1.6, xu = ox + t * dx, yu = oy + t * dy, xd, yd, cx, cy;
+                        lens(xu, yu, out xd, out yd);
+                        if (Math.Abs(xd) > 1 || Math.Abs(yd) > hh) continue;
+                        if (!m.Undistort(xd, yd, out cx, out cy)) { cx = xd; cy = yd; }
+                        pts.Add(new[] { cx, cy });
+                    }
+                    if (pts.Count < 12) continue;
+                    double mx = 0, my = 0;
+                    foreach (var q in pts) { mx += q[0]; my += q[1]; }
+                    mx /= pts.Count; my /= pts.Count;
+                    double sxx = 0, sxy = 0, syy = 0;
+                    foreach (var q in pts) { sxx += (q[0] - mx) * (q[0] - mx); sxy += (q[0] - mx) * (q[1] - my); syy += (q[1] - my) * (q[1] - my); }
+                    double ang = 0.5 * Math.Atan2(2 * sxy, sxx - syy), ux = Math.Cos(ang), uy = Math.Sin(ang);
+                    double far = 0;
+                    foreach (var q in pts) far = Math.Max(far, Math.Abs(-(q[0] - mx) * uy + (q[1] - my) * ux));
+                    far *= pxPerUnit;
+                    ss += far * far;
+                    n++;
+                    worst = Math.Max(worst, far);
+                }
+            }
+            rms = Math.Sqrt(ss / Math.Max(1, n));
+        }
+
+        // fit-exp [noisePx] [seeds] [freeRidge] [growth] [layouts,comma] [maxRung]: the old (radial) and the new fit on lenses of increasing complexity.
+        private static int FitExperimentCmd(string[] a)
+        {
+            double noise = a.Length > 1 ? double.Parse(a[1], CultureInfo.InvariantCulture) : 0.4;
+            int seeds = a.Length > 2 ? int.Parse(a[2]) : 3;
+            var opt = new Desqueeze.Core.Lens.DistortionFitOptions();
+            if (a.Length > 3) opt.FreeRidge = double.Parse(a[3], CultureInfo.InvariantCulture);
+            if (a.Length > 4) opt.FreeRidgeGrowth = double.Parse(a[4], CultureInfo.InvariantCulture);
+            string[] layouts = a.Length > 5 ? a[5].Split(',') : new[] { "grid", "level", "diag", "sparse", "h-only", "central" };
+            if (a.Length > 6) opt.MaxRung = int.Parse(a[6]);
+            if (a.Length > 7) opt.SecondOrderRidge = double.Parse(a[7], CultureInfo.InvariantCulture);
+            if (a.Length > 8) opt.SplitRidge = double.Parse(a[8], CultureInfo.InvariantCulture);
+            if (a.Length > 9) opt.SplitRidge2 = double.Parse(a[9], CultureInfo.InvariantCulture);
+            if (a.Length > 10) opt.HiddenRidge = double.Parse(a[10], CultureInfo.InvariantCulture);
+            opt.Trace = Environment.GetEnvironmentVariable("FITTRACE") != null;
+            if (Environment.GetEnvironmentVariable("FIT_PPT") != null) opt.PointsPerTerm = double.Parse(Environment.GetEnvironmentVariable("FIT_PPT"), CultureInfo.InvariantCulture);
+            if (Environment.GetEnvironmentVariable("FIT_MINLINES") != null) opt.MinLinesForGeneral = int.Parse(Environment.GetEnvironmentVariable("FIT_MINLINES"));
+            if (Environment.GetEnvironmentVariable("FIT_PREC") != null) opt.PointPrecision = double.Parse(Environment.GetEnvironmentVariable("FIT_PREC"), CultureInfo.InvariantCulture);
+            const int w = 6000, h = 4000;
+            const double f = 1.5;
+            double hh = h / (w * f), ppu = w * f / 2;
+            var scenarios = FitScenarios(hh);
+            Console.WriteLine(string.Format("noise {0} px, {1} seed(s), ridge {2} x {3}^deg; straightness of world lines after correction, px (rms / worst), 9000 px wide", noise, seeds, opt.FreeRidge, opt.FreeRidgeGrowth));
+            double totalOld = 0, totalNew = 0, ms = 0, totalOldD = 0, totalNewD = 0;
+            int cells = 0;
+            Console.WriteLine("   (hv = level and upright lines, dg = diagonals; rms/worst)");
+            foreach (var layout in layouts)
+            {
+                Console.WriteLine("-- lines: " + layout);
+                foreach (var sc in scenarios)
+                {
+                    var acc = new double[3, 4];   // none/old/new x hv rms, hv worst, dg rms, dg worst
+                    string kinds = "";
+                    for (int seed = 1; seed <= seeds; seed++)
+                    {
+                        var lines = MarkedLines(sc.Lens, layout, w, h, f, noise, seed * 17 + 3);
+                        var old = LegacyDistortionFit.Fit(lines, w, h, f);
+                        var sw = Stopwatch.StartNew();
+                        var neu = Desqueeze.Core.Lens.DistortionFit.Fit(lines, w, h, f, opt);
+                        ms = Math.Max(ms, sw.Elapsed.TotalMilliseconds);
+                        var models = new[] { new Desqueeze.Core.Lens.DistortionModel(), old.Model, neu.Model };
+                        for (int k = 0; k < 3; k++)
+                            for (int which = 1; which <= 2; which++)
+                            {
+                                double r, wo;
+                                Straightness(sc.Lens, models[k], hh, ppu, out r, out wo, which);
+                                acc[k, (which - 1) * 2] += r / seeds;
+                                acc[k, (which - 1) * 2 + 1] = Math.Max(acc[k, (which - 1) * 2 + 1], wo);
+                            }
+                        kinds += (seed > 1 ? "," : "") + neu.Rung;
+                        if (Environment.GetEnvironmentVariable("FITDEBUG") != null && seed == 1)
+                            Console.WriteLine("      " + neu.Model + "\n      rms on marked lines " + neu.RmsAfter.ToString("0.00") + " px (old " + old.RmsAfter.ToString("0.00") + ")");
+                    }
+                    totalOld += acc[1, 0]; totalNew += acc[2, 0]; totalOldD += acc[1, 2]; totalNewD += acc[2, 2]; cells++;
+                    Console.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                        "  {0,-32} none hv {1,5:0.0}/{2,5:0.0} dg {3,5:0.0}/{4,5:0.0} | old hv {5,5:0.00}/{6,5:0.0} dg {7,5:0.00}/{8,5:0.0} | new hv {9,5:0.00}/{10,5:0.0} dg {11,5:0.00}/{12,5:0.0}  rung {13}",
+                        sc.Name, acc[0, 0], acc[0, 1], acc[0, 2], acc[0, 3], acc[1, 0], acc[1, 1], acc[1, 2], acc[1, 3], acc[2, 0], acc[2, 1], acc[2, 2], acc[2, 3], kinds));
+                }
+            }
+            Console.WriteLine(string.Format(CultureInfo.InvariantCulture, "mean rms: level/upright old {0:0.00}, new {1:0.00} px; diagonals old {2:0.00}, new {3:0.00} px; slowest fit {4:0} ms",
+                totalOld / cells, totalNew / cells, totalOldD / cells, totalNewD / cells, ms));
+            return 0;
+        }
+
         // distortion-fit <lines.json>: {"width", "height", "factor", "lines": [{"orientation", "points": [[x, y], ...]}]}
         private static int DistortionFitCmd(string[] a)
         {
@@ -494,7 +717,7 @@ namespace DesqueezeBench
                     names.Add(l.TryGetProperty("name", out var n) ? n.GetString() : "");
                 }
                 var sw = Stopwatch.StartNew();
-                var r = Desqueeze.Core.Lens.DistortionFit.Fit(lines, w, h, f);
+                var r = Desqueeze.Core.Lens.DistortionFit.Fit(lines, w, h, f, new Desqueeze.Core.Lens.DistortionFitOptions { Trace = Environment.GetEnvironmentVariable("FITTRACE") != null });
                 Console.WriteLine("fit in " + sw.ElapsedMilliseconds + " ms: " + r.Kind + ", " + r.Lines + " lines, " + r.Points + " points");
                 Console.WriteLine("model " + r.Model.ToString());
                 Console.WriteLine(string.Format(CultureInfo.InvariantCulture, "straightness RMS {0:0.00} px before, {1:0.00} px after", r.RmsBefore, r.RmsAfter));
@@ -505,8 +728,7 @@ namespace DesqueezeBench
                     Console.WriteLine(string.Format(CultureInfo.InvariantCulture, "  {0,-18} {1,-10} {2,3} pts  rms after {3:0.00} px",
                         names[i], lines[i].orientation, lines[i].points.Count, r.LineRms[i]));
                 if (r.Warning != null) Console.WriteLine("warning: " + r.Warning);
-                if (a.Length > 2) File.WriteAllText(a[2], string.Join(",", r.Model.Kx.Select(v => v.ToString("R", CultureInfo.InvariantCulture))) + ";" +
-                                                           string.Join(",", r.Model.Ky.Select(v => v.ToString("R", CultureInfo.InvariantCulture))));
+                if (a.Length > 2) File.WriteAllText(a[2], r.Model.ToString());
             }
             return 0;
         }
@@ -744,6 +966,7 @@ namespace DesqueezeBench
             OrientationTests(rnd);
             CalibrationTests();
             LensTests();
+            ViewTests();
 
             string modelPath = Path.Combine("Assets", "StreamingAssets", "desqueeze-axissr.bin");
             if (File.Exists(modelPath)) AxisSRTests(modelPath);
@@ -1122,6 +1345,40 @@ namespace DesqueezeBench
                 }
             Check(inv, "undistort inverts distort (5 models incl. anamorphic and moustache, 2000 points, < 1e-9)");
             Check(jac, "analytic Jacobian matches finite differences");
+            // general terms
+            var general = Model(-0.03, -0.012, 0.004, 0);
+            general.Terms = new[]
+            {
+                new Desqueeze.Core.Lens.DistortionTerm(1, 2, -0.02, 0), new Desqueeze.Core.Lens.DistortionTerm(2, 1, 0, -0.05), new Desqueeze.Core.Lens.DistortionTerm(4, 1, 0, 0.07),
+                new Desqueeze.Core.Lens.DistortionTerm(2, 0, 0.004, 0.006), new Desqueeze.Core.Lens.DistortionTerm(1, 1, -0.003, 0.002), new Desqueeze.Core.Lens.DistortionTerm(0, 7, 0.3, 0.2),
+            };
+            bool ginv = true, gjac = true, gsame = true;
+            for (int i = 0; i < 2000; i++)
+            {
+                double xu = rnd.NextDouble() * 2.2 - 1.1, yu = (rnd.NextDouble() * 2 - 1) * 0.5, xd, yd, bx, by, a, b, c, d, xs, ys;
+                general.Distort(xu, yu, out xd, out yd, out a, out b, out c, out d);
+                general.Distort(xu, yu, out xs, out ys);
+                if (xs != xd || ys != yd) gsame = false;
+                if (!general.Undistort(xd, yd, out bx, out by) || Math.Abs(bx - xu) > 1e-9 || Math.Abs(by - yu) > 1e-9) ginv = false;
+                const double h = 1e-6;
+                double x1, y1, x2, y2;
+                general.Distort(xu + h, yu, out x1, out y1);
+                general.Distort(xu - h, yu, out x2, out y2);
+                if (Math.Abs((x1 - x2) / (2 * h) - a) > 1e-6 || Math.Abs((y1 - y2) / (2 * h) - c) > 1e-6) gjac = false;
+                general.Distort(xu, yu + h, out x1, out y1);
+                general.Distort(xu, yu - h, out x2, out y2);
+                if (Math.Abs((x1 - x2) / (2 * h) - b) > 1e-6 || Math.Abs((y1 - y2) / (2 * h) - d) > 1e-6) gjac = false;
+            }
+            Check(ginv && gjac && gsame, "general terms (asymmetric, up to 7th degree): undistort inverts distort, Jacobian matches finite differences");
+            {
+                var half = general.Scaled(0.5);
+                var twice = half.Scaled(2);
+                var radialOnly = general.Clone();
+                radialOnly.Terms = new Desqueeze.Core.Lens.DistortionTerm[0];
+                Check(Math.Abs(half.Terms[2].Y - 0.035) < 1e-15 && twice.SameAs(general, 1e-15) && !half.SameAs(general) && !radialOnly.SameAs(general) &&
+                      !general.IsIdentity && general.Scaled(0).IsIdentity && general.ToString() != radialOnly.ToString(),
+                    "the correction strength scales the general terms too; models with different terms differ");
+            }
             var scaled = Model(-0.04, -0.02, 0.01, 0).Scaled(0.5);
             Check(Math.Abs(scaled.Kx[0] + 0.02) < 1e-15 && Math.Abs(scaled.Ky[0] + 0.01) < 1e-15 && Math.Abs(scaled.Kx[1] - 0.005) < 1e-15,
                 "amount scales the coefficients");
@@ -1312,11 +1569,163 @@ namespace DesqueezeBench
                 Check(rr != null && rr.Lines > 0 && Math.Abs(refit.calibration.factor - 1.5) < 1e-12 && rr.RmsAfter < 0.5,
                     "refit for a new factor keeps the lines straight (" + rr.RmsAfter.ToString("0.00") + " px)");
 
-                Check(Desqueeze.Core.Lens.DistortionSummary.Classify(Model(-0.03, -0.03), hh) == Desqueeze.Core.Lens.DistortionType.Barrel &&
-                      Desqueeze.Core.Lens.DistortionSummary.Classify(Model(0.03, 0.03), hh) == Desqueeze.Core.Lens.DistortionType.Pincushion &&
-                      Desqueeze.Core.Lens.DistortionSummary.Classify(new Desqueeze.Core.Lens.DistortionModel(), hh) == Desqueeze.Core.Lens.DistortionType.None,
-                    "distortion described as barrel / pincushion: " + Desqueeze.Core.Lens.DistortionSummary.Describe(Model(-0.03, -0.03), hh));
+                string text = Desqueeze.Core.Lens.DistortionSummary.Describe(Model(-0.03, -0.03), hh);
+                Check(text.StartsWith("Lines bend by up to") && Desqueeze.Core.Lens.DistortionSummary.Describe(new Desqueeze.Core.Lens.DistortionModel(), hh) == "No distortion" &&
+                      Math.Abs(Model(-0.03, -0.03).MaxBend(hh) - Model(0.03, 0.03).MaxBend(hh)) < 0.3 * Model(0.03, 0.03).MaxBend(hh) && general.MaxBend(hh) > 0,
+                    "distortion described by how far lines bend, whatever its shape: " + text);
+
+                // general terms in a profile
+                var gp = p.Clone();
+                gp.distortion = general.Clone();
+                string gj = Desqueeze.Core.Lens.LensProfileJson.Write(gp);
+                var gb = Desqueeze.Core.Lens.LensProfileJson.Read(gj);
+                Check(gj.Contains("\"formatVersion\": 2") && json.Contains("\"formatVersion\": 1") && gb.distortion.SameAs(general) && !gb.distortion.SameAs(p.distortion) &&
+                      Desqueeze.Core.Lens.LensProfileJson.Write(gb) == gj && gb.SameSettings(gp) && !gb.SameSettings(p),
+                    "general terms round-trip in a profile (format 2); a radial profile is still written as format 1");
+                bool badTerm = false;
+                try { Desqueeze.Core.Lens.LensProfileJson.Read(gj.Replace("\"i\": 1, \"j\": 2", "\"i\": 1, \"j\": 20")); } catch (FormatException) { badTerm = true; }
+                Check(badTerm, "a term with powers out of range is refused");
             }
+
+            // complex lenses: the general model
+            {
+                var scenarios = FitScenarios(hh);
+                Func<string, FitScenario> find = n => scenarios.Find(x => x.Name == n);
+                foreach (string name in new[] { "barrel centre, pincushion sides", "anamorphic + smile", "decentred barrel" })
+                {
+                    var sc = find(name);
+                    var lines = MarkedLines(sc.Lens, "level", W, H, F, 0.3, 5);
+                    var old = LegacyDistortionFit.Fit(lines, W, H, F);
+                    var sw = Stopwatch.StartNew();
+                    var r = Desqueeze.Core.Lens.DistortionFit.Fit(lines, W, H, F);
+                    long ms = sw.ElapsedMilliseconds;
+                    double rms, worst, orms, oworst;
+                    Straightness(sc.Lens, r.Model, hh, ppu, out rms, out worst, 1);
+                    Straightness(sc.Lens, old.Model, hh, ppu, out orms, out oworst, 1);
+                    Check(r.Rung >= 4 && r.RmsAfter < 0.6 && worst < 3.5 && worst < 0.4 * oworst,
+                        "\"" + name + "\": marked lines straight to " + r.RmsAfter.ToString("0.00") + " px (radial-only fit: " + old.RmsAfter.ToString("0.00") +
+                        "); level and upright lines anywhere bend at most " + worst.ToString("0.0") + " px (was " + oworst.ToString("0.0") + ")  [" + r.Kind + ", " + ms + " ms]");
+                }
+                {
+                    // what level lines can't show follows the radial pattern: x^3 in the horizontal displacement = its x y^2 term
+                    var r = Desqueeze.Core.Lens.DistortionFit.Fit(MarkedLines(find("barrel centre, pincushion sides").Lens, "level", W, H, F, 0.3, 5), W, H, F);
+                    double x3 = 0, xy2 = 0, y3 = 0, x2y = 0;
+                    foreach (var t in r.Model.Terms)
+                    {
+                        if (t.I == 3 && t.J == 0) x3 = t.X;
+                        if (t.I == 1 && t.J == 2) xy2 = t.X;
+                        if (t.I == 0 && t.J == 3) y3 = t.Y;
+                        if (t.I == 2 && t.J == 1) x2y = t.Y;
+                    }
+                    Check(Math.Abs(xy2 + 0.02) < 0.003 && Math.Abs(x3 - xy2) < 0.004 && Math.Abs(x2y + 0.05) < 0.004 && Math.Abs(y3 - x2y) < 0.01,
+                        "terms the lines can't see follow the radial pattern (x^3 " + x3.ToString("0.0000") + " ~ x y^2 " + xy2.ToString("0.0000") + ", y^3 " +
+                        y3.ToString("0.0000") + " ~ x^2 y " + x2y.ToString("0.0000") + ")");
+                }
+                {
+                    // lines at steep angles reveal them
+                    var sc = find("barrel centre, pincushion sides");
+                    var a1 = Desqueeze.Core.Lens.DistortionFit.Fit(MarkedLines(sc.Lens, "level", W, H, F, 0.3, 5), W, H, F);
+                    var a2 = Desqueeze.Core.Lens.DistortionFit.Fit(MarkedLines(sc.Lens, "diag", W, H, F, 0.3, 5), W, H, F);
+                    double r1, w1, r2, w2;
+                    Straightness(sc.Lens, a1.Model, hh, ppu, out r1, out w1, 2);
+                    Straightness(sc.Lens, a2.Model, hh, ppu, out r2, out w2, 2);
+                    Check(r2 < 0.6 * r1 && r2 < 2.5, "a few diagonal lines straighten the diagonals too (" + r1.ToString("0.0") + " -> " + r2.ToString("0.0") + " px rms)");
+                }
+                {
+                    // simple lenses keep the simple model, with or without noise
+                    bool simple = true;
+                    string kinds = "";
+                    foreach (double noise in new[] { 0.0, 0.3, 1.0 })
+                        foreach (string name in new[] { "radial barrel", "anamorphic barrel", "radial moustache" })
+                        {
+                            var r = Desqueeze.Core.Lens.DistortionFit.Fit(MarkedLines(find(name).Lens, "grid", W, H, F, noise, 9), W, H, F);
+                            if (r.Rung >= 4) { simple = false; kinds += " " + name + "@" + noise + ":" + r.Rung; }
+                        }
+                    Check(simple, "radial and anamorphic lenses are still fitted with the radial models (no general terms without need)" + kinds);
+                }
+                {
+                    // one direction only
+                    var sc = find("barrel centre, pincushion sides");
+                    var lines = MarkedLines(sc.Lens, "h-only", W, H, F, 0.3, 5);
+                    var r = Desqueeze.Core.Lens.DistortionFit.Fit(lines, W, H, F);
+                    var old = LegacyDistortionFit.Fit(lines, W, H, F);
+                    Check(r.RmsAfter < 0.7 && old.RmsAfter > 3 * r.RmsAfter && r.Warning != null,
+                        "horizontal lines alone are straightened whatever their shape (" + old.RmsAfter.ToString("0.00") + " -> " + r.RmsAfter.ToString("0.00") + " px), with a hint to add vertical ones");
+                }
+            }
+        }
+
+        private static void ViewTests()
+        {
+            Console.WriteLine("Viewer coordinates");
+            var rnd = new Random(8);
+            bool round = true, edges = true, pan = true, zoomOk = true, hover = true;
+            foreach (int zoom in new[] { -8, -3, -2, 1, 2, 5, 16 })
+                for (int k = 0; k < 200; k++)
+                {
+                    var t = new ViewTransform(zoom, rnd.NextDouble() * 6000, rnd.NextDouble() * 4000, 900 + rnd.Next(400), 500 + rnd.Next(300));
+                    double x = rnd.NextDouble() * 6000 - 0.5, y = rnd.NextDouble() * 4000 - 0.5, vx, vy, bx, by;
+                    t.ImageToView(x, y, out vx, out vy);
+                    t.ViewToImage(vx, vy, out bx, out by);
+                    if (Math.Abs(bx - x) > 1e-9 || Math.Abs(by - y) > 1e-9) round = false;
+                    // a pixel's centre lies midway between the edges its tile is drawn with
+                    int px = (int)Math.Round(x), py = (int)Math.Round(y);
+                    t.ImageToView(px, py, out vx, out vy);
+                    if (Math.Abs(vx - 0.5 * (t.EdgeToViewX(px) + t.EdgeToViewX(px + 1))) > 1e-9 || Math.Abs(vy - 0.5 * (t.EdgeToViewY(py) + t.EdgeToViewY(py + 1))) > 1e-9) edges = false;
+                    if (t.OriginX != Math.Floor(t.OriginX) || t.OriginY != Math.Floor(t.OriginY)) edges = false;
+                    // the pixel under a view position is the one whose tile covers it
+                    int hx, hy;
+                    t.PixelAt(vx, vy, out hx, out hy);
+                    if (hx != px || hy != py) hover = false;
+                    // dragging by (dx, dy) moves every image point by exactly (dx, dy) on screen
+                    int dx = rnd.Next(-300, 300), dy = rnd.Next(-300, 300);
+                    var p2 = t.Panned(dx, dy);
+                    double wx, wy;
+                    t.ImageToView(x, y, out vx, out vy);
+                    p2.ImageToView(x, y, out wx, out wy);
+                    if (Math.Abs(wx - vx - dx) > 1e-6 || Math.Abs(wy - vy - dy) > 1e-6) pan = false;
+                    // zooming keeps the image point under the cursor within a pixel
+                    double ax = rnd.NextDouble() * t.ViewWidth, ay = rnd.NextDouble() * t.ViewHeight, ix, iy, jx, jy;
+                    t.ViewToImage(ax, ay, out ix, out iy);
+                    var z = t.Zoomed(zoom == 16 ? 8 : zoom == -8 ? -6 : zoom + 1 == 0 ? 1 : zoom + 1 == -1 ? 1 : zoom + 1, ax, ay);
+                    z.ImageToView(ix, iy, out jx, out jy);
+                    if (Math.Abs(jx - ax) > 1.0 + 1e-9 || Math.Abs(jy - ay) > 1.0 + 1e-9) zoomOk = false;
+                }
+            Check(round, "view -> image -> view round trip at every zoom");
+            Check(edges, "marks use the tiles' grid: a pixel's centre is midway between its edges, the origin a whole pixel");
+            Check(hover, "the pixel under a position is the one drawn there");
+            Check(pan, "panning moves marks exactly as far as the image");
+            Check(zoomOk, "zooming at the cursor keeps the point under it (within a pixel)");
+
+            // line runs
+            bool runsOk = true;
+            int most = 0;
+            for (int k = 0; k < 2000; k++)
+            {
+                double ax = rnd.NextDouble() * 800, ay = rnd.NextDouble() * 600, len = 5 + rnd.NextDouble() * 700, ang = (rnd.NextDouble() - 0.5) * (k % 2 == 0 ? 0.2 : 6.283);
+                double bx = ax + len * Math.Cos(ang), by = ay + len * Math.Sin(ang), w = 1 + rnd.Next(3);
+                double covered = 0, prevTo = double.NaN, prevRow = double.NaN;
+                bool major = Math.Abs(bx - ax) >= Math.Abs(by - ay), ok = true;
+                int n = LineRaster.Runs(ax, ay, bx, by, w, (h, row, from, to) =>
+                {
+                    if (h != major || to <= from || row != Math.Floor(row)) ok = false;
+                    if (!double.IsNaN(prevTo) && (Math.Abs(from - prevTo) > 1e-9 || Math.Abs(row - prevRow) != 1)) ok = false;   // contiguous, one row apart
+                    // the run sits on the line: its centre across is within half a pixel of the line at both ends
+                    foreach (double s in new[] { from, to })
+                    {
+                        double tt = major ? (s - ax) / (bx - ax) : (s - ay) / (by - ay);
+                        double c = major ? ay + tt * (by - ay) : ax + tt * (bx - ax);
+                        if (Math.Abs(row + w * 0.5 - c) > 0.5 + 1e-6) ok = false;
+                    }
+                    covered += to - from;
+                    prevTo = to;
+                    prevRow = row;
+                });
+                double extent = major ? Math.Abs(bx - ax) : Math.Abs(by - ay), cross = major ? Math.Abs(by - ay) : Math.Abs(bx - ax);
+                if (!ok || Math.Abs(covered - extent) > 1e-6 || n > cross + 2 || n < 1) runsOk = false;
+                most = Math.Max(most, n);
+            }
+            Check(runsOk, "lines split into contiguous runs that stay within half a pixel of the line, one per row crossed (at most " + most + " here)");
         }
 
         private static void TwoPassTests(string modelPath)
@@ -1369,6 +1778,35 @@ namespace DesqueezeBench
             var tp = Desqueeze.Core.Lens.TwoPassWarp.Correct(smooth, 1, lm, fr, 300, 200, new Desqueeze.Core.Lens.TwoPassOptions { Horizontal = Desqueeze.Core.Lens.WarpPassMethod.Kernel, OutputBitDepth = 16 });
             double p = Psnr8(w2, tp, 12);
             Check(p > 50, "two-pass and 2-D warp agree on a smooth image (" + p.ToString("0.0") + " dB)");
+
+            // the same with a general model (asymmetric, 5th degree): flat stays flat, the two warps agree
+            {
+                var gm = Model(-0.03, -0.012);
+                gm.Terms = new[]
+                {
+                    new Desqueeze.Core.Lens.DistortionTerm(1, 2, -0.02, 0), new Desqueeze.Core.Lens.DistortionTerm(2, 1, 0, -0.05), new Desqueeze.Core.Lens.DistortionTerm(4, 1, 0, 0.07),
+                    new Desqueeze.Core.Lens.DistortionTerm(2, 0, 0.004, 0.006), new Desqueeze.Core.Lens.DistortionTerm(0, 2, -0.01, 0.003), new Desqueeze.Core.Lens.DistortionTerm(1, 1, 0.004, -0.004),
+                };
+                var w3 = Desqueeze.Core.Lens.LensCorrection.Correct(smooth, 1, gm, fr, 300, 200, Desqueezer.DistortionWarpOptions(smooth, 16));
+                var t3 = Desqueeze.Core.Lens.TwoPassWarp.Correct(smooth, 1, gm, fr, 300, 200, new Desqueeze.Core.Lens.TwoPassOptions { Horizontal = Desqueeze.Core.Lens.WarpPassMethod.Kernel, OutputBitDepth = 16 });
+                double pg = Psnr8(w3, t3, 12);
+                var f8 = new PixelImage(120, 80, 3, 8);
+                for (int i = 0; i < f8.Data8.Length; i++) f8.Data8[i] = 118;
+                double hh = 80.0 / (120 * 1.5);
+                var crop = Desqueeze.Core.Lens.LensCorrection.Canvas(gm, hh, Desqueeze.Core.Lens.DistortionEdges.AutoCrop);
+                int ow, oh;
+                Desqueeze.Core.Lens.LensCorrection.CanvasSize(crop, 90, 90, out ow, out oh);
+                var o8 = Desqueeze.Core.Lens.TwoPassWarp.Correct(f8, 1.5, gm, crop, ow, oh, new Desqueeze.Core.Lens.TwoPassOptions { Horizontal = Desqueeze.Core.Lens.WarpPassMethod.Detail, DetailModel = model });
+                bool gflat = true;
+                foreach (byte v in o8.Data8) if (Math.Abs(v - 118) > 1) gflat = false;
+                // the settings pipeline accepts it and reports the size it makes
+                var gs = new DesqueezeSettings { Factor = 1.5, Distortion = gm };
+                int ew, eh;
+                Desqueezer.OutputSize(img, gs, out ew, out eh);
+                var gr = Desqueezer.Process(img, gs);
+                Check(pg > 50 && gflat && gr.Width == ew && gr.Height == eh,
+                    "general model: two-pass and 2-D warp agree (" + pg.ToString("0.0") + " dB), flat stays flat when auto-cropped, the pipeline makes " + ew + " x " + eh);
+            }
         }
 
         private static double Srgb8(double linear)

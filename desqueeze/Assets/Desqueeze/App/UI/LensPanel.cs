@@ -11,7 +11,7 @@ namespace Desqueeze.App.UI
 {
     /// <summary>
     /// Side-panel sections for lens profiles (choose, create, save, import, export, delete) and for applying the profile's
-    /// distortion correction (amount, auto-crop).
+    /// distortion correction (strength, auto-crop).
     /// </summary>
     internal sealed class LensPanel
     {
@@ -176,11 +176,11 @@ namespace Desqueeze.App.UI
 
         // ============================================================================ distortion
 
-        /// <summary>Draws the DISTORTION CORRECTION section. Returns true if a setting changed.</summary>
+        /// <summary>Draws the LENS DISTORTION section with the Distortion Correction strength. Returns true if a setting changed.</summary>
         public bool DrawDistortion(DesqueezeSettings s, UiStyles ui, PixelImage image)
         {
             bool changed = false;
-            GUILayout.Label("DISTORTION CORRECTION", ui.Section);
+            GUILayout.Label("LENS DISTORTION", ui.Section);
             var model = s.Distortion;
             var p = _profiles.Working;
             if (model == null || model.IsIdentity)
@@ -199,14 +199,17 @@ namespace Desqueeze.App.UI
                                 p.calibration.PointCount + " points), straight to " + p.distortionRms.ToString("0.00", CultureInfo.InvariantCulture) +
                                 " px  ·  " + p.distortionKind, ui.MutedSmall);
 
+            const string strengthTip = "How much of the measured distortion to correct. At 100% the lines you marked come out straight; less keeps " +
+                                       "some of the lens' character, 0% turns the correction off, and more than 100% over-corrects.";
             GUILayout.BeginHorizontal();
-            GUILayout.Label(new GUIContent("Amount", "How much of the measured distortion to correct. 100% straightens the lines; less keeps some of the lens' character."),
-                ui.Label, GUILayout.Width(ui.S(60)));
-            float amount = GUILayout.HorizontalSlider((float)(s.DistortionAmount * 100), 0f, 150f, ui.Slider, ui.Thumb, GUILayout.ExpandWidth(true));
+            GUILayout.Label(new GUIContent("Distortion Correction", strengthTip), ui.Label);
+            GUILayout.FlexibleSpace();
+            float amount = Mathf.Round((float)(s.DistortionAmount * 100));
+            GUILayout.Label(amount.ToString("0", CultureInfo.InvariantCulture) + "%", ui.Value, GUILayout.Width(ui.S(48)));
+            GUILayout.EndHorizontal();
+            amount = GUILayout.HorizontalSlider(amount, 0f, 150f, ui.Slider, ui.Thumb, GUILayout.ExpandWidth(true));
             amount = Mathf.Round(amount);
             if (Mathf.Abs(amount - 100f) < 2f) amount = 100f;
-            GUILayout.Label(amount.ToString("0", CultureInfo.InvariantCulture) + "%", ui.Value, GUILayout.Width(ui.S(44)));
-            GUILayout.EndHorizontal();
             if (Math.Abs(amount / 100.0 - s.DistortionAmount) > 1e-9)
             {
                 s.DistortionAmount = amount / 100.0;
@@ -244,7 +247,7 @@ namespace Desqueeze.App.UI
             }
             else
             {
-                GUILayout.Label(amountAtStart <= 0 ? "Amount 0%: no correction." : "Applies to every image de-squeezed with this profile.", ui.MutedSmall);
+                GUILayout.Label(amountAtStart <= 0 ? "Distortion Correction is at 0%: nothing is corrected." : "Applies to every image de-squeezed with this profile.", ui.MutedSmall);
             }
             return changed;
         }

@@ -58,9 +58,7 @@ namespace Desqueeze.App
             var db = b.ActiveDistortion();
             if (da == null || db == null) return da == null && db == null;
             if (a.DistortionEdges != b.DistortionEdges || a.DistortionOrder != b.DistortionOrder) return false;
-            for (int i = 0; i < 3; i++)
-                if (da.Kx[i] != db.Kx[i] || da.Ky[i] != db.Ky[i]) return false;
-            return true;
+            return da.SameAs(db);
         }
 
         // ============================================================================ main area
@@ -193,7 +191,7 @@ namespace Desqueeze.App
             {
                 GUILayout.Label(_calTool == CalTool.Distortion
                     ? "Measuring distortion. Each change is fitted at once and stored in the lens profile above (Save it there). " +
-                      "Amount and Auto-crop above apply it; Preview shows the corrected photo."
+                      "Distortion Correction and Auto-crop above apply it; Preview shows the corrected photo."
                     : "Calibrating. Change the factor above, or with the buttons over the image, until the circle " +
                       "exactly fills the red ring. Then press Done and apply the de-squeeze.", ui.MutedSmall);
                 if (GUILayout.Button(new GUIContent("Done", "Leave calibration and keep the factor (Esc)"), ui.Primary))

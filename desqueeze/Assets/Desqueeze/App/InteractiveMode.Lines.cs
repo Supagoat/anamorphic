@@ -432,7 +432,7 @@ namespace Desqueeze.App
         {
             if (on && (_original == null || _app.Settings.ActiveDistortion() == null))
             {
-                _app.ShowInfo(_original == null ? "Open a photo first." : "Nothing to preview yet: add lines (3+ points each) so a distortion can be measured, and set Amount above 0%.");
+                _app.ShowInfo(_original == null ? "Open a photo first." : "Nothing to preview yet: add lines (3+ points each) so a distortion can be measured, and set Distortion Correction above 0%.");
                 on = false;
             }
             if (on == _lnPreview) return;
@@ -939,7 +939,7 @@ namespace Desqueeze.App
             if (snap != _snap) _snap = snap;
             GUILayout.Space(ui.S(6));
             GUI.enabled = on && (_lnPreview || _app.Settings.ActiveDistortion() != null);
-            if (GUILayout.Button(new GUIContent("Preview", "Show the photo corrected with the measured distortion and the current amount, with straight lines through the corrected points (P)"),
+            if (GUILayout.Button(new GUIContent("Preview", "Show the photo corrected with the measured distortion at the current Distortion Correction strength, with straight lines through the corrected points (P)"),
                     _lnPreview ? ui.ButtonSelected : ui.Button, GUILayout.Width(ui.S(72))))
                 _app.Defer(() => SetLinePreview(!_lnPreview));
             GUI.enabled = true;

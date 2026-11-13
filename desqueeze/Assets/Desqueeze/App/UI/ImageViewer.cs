@@ -231,25 +231,26 @@ namespace Desqueeze.App.UI
         {
             gui = default(Vector2);
             if (_layer == null) return false;
-            double ox, oy;
-            Origin(out ox, out oy);
-            double s = ScaleFactor;
+            double vx, vy;
+            Transform.ImageToView(x, y, out vx, out vy);
             float ppp = UiStyles.PixelsPerPoint;
-            gui = new Vector2((float)(view.x + (ox + (x + 0.5) * s) / ppp), (float)(view.y + (oy + (y + 0.5) * s) / ppp));
+            gui = new Vector2((float)(view.x + vx / ppp), (float)(view.y + vy / ppp));
             return true;
         }
+
+        /// <summary>
+        /// The mapping between image and view pixels as of the last <see cref="Draw"/>: the one the tiles are placed with,
+        /// so anything positioned through it stays on the image.
+        /// </summary>
+        public ViewTransform Transform => new ViewTransform(_zoom, _cx, _cy, _viewSizePx.x, _viewSizePx.y);
 
         /// <summary>The image point (pixel-centre coordinates) under a GUI position; false if it is outside the image.</summary>
         public bool GuiToImage(Rect view, Vector2 gui, out double x, out double y)
         {
             x = y = 0;
             if (_layer == null) return false;
-            double ox, oy;
-            Origin(out ox, out oy);
-            double s = ScaleFactor;
             float ppp = UiStyles.PixelsPerPoint;
-            x = ((gui.x - view.x) * ppp - ox) / s - 0.5;
-            y = ((gui.y - view.y) * ppp - oy) / s - 0.5;
+            Transform.ViewToImage((gui.x - view.x) * ppp, (gui.y - view.y) * ppp, out x, out y);
             return x >= -0.5 && y >= -0.5 && x <= _layer.Image.Width - 0.5 && y <= _layer.Image.Height - 0.5;
         }
 
@@ -349,23 +350,20 @@ namespace Desqueeze.App.UI
         private void SetZoom(int zoom, Vector2? anchorPx)
         {
             if (_layer == null) { _zoom = zoom; return; }
-            double oldScale = ScaleFactor;
             Vector2 a = anchorPx ?? _viewSizePx * 0.5f;
-            double ax = a.x - _viewSizePx.x * 0.5, ay = a.y - _viewSizePx.y * 0.5;
-            double ix = _cx + ax / oldScale, iy = _cy + ay / oldScale; // image point under the anchor
-            _zoom = zoom;
-            double s = ScaleFactor;
-            _cx = ix - ax / s;
-            _cy = iy - ay / s;
+            var t = Transform.Zoomed(zoom, a.x, a.y);     // the image point under the anchor stays there
+            _zoom = t.Zoom;
+            _cx = t.CentreX;
+            _cy = t.CentreY;
             ClampCentre();
             _fitPending = false;
         }
 
         public void PanPixels(float dx, float dy)
         {
-            double s = ScaleFactor;
-            _cx -= dx / s;
-            _cy -= dy / s;
+            var t = Transform.Panned(dx, dy);
+            _cx = t.CentreX;
+            _cy = t.CentreY;
             ClampCentre();
         }
 
@@ -443,11 +441,8 @@ namespace Desqueeze.App.UI
                 Hover = null;
                 return;
             }
-            double ox, oy;
-            Origin(out ox, out oy);
-            double s = ScaleFactor;
-            int x = (int)Math.Floor((localPx.x - ox) / s);
-            int y = (int)Math.Floor((localPx.y - oy) / s);
+            int x, y;
+            Transform.PixelAt(localPx.x, localPx.y, out x, out y);
             if (x < 0 || y < 0 || x >= _layer.Image.Width || y >= _layer.Image.Height) Hover = null;
             else Hover = new Vector2Int(x, y);
         }
@@ -455,9 +450,9 @@ namespace Desqueeze.App.UI
         /// <summary>Top-left of the image in view pixels, snapped to whole pixels.</summary>
         private void Origin(out double ox, out double oy)
         {
-            // Position in the displayed (possibly reduced) image grid, then whole-pixel snap.
-            ox = Math.Floor(_viewSizePx.x * 0.5 - (_cx / Red) * Mag);
-            oy = Math.Floor(_viewSizePx.y * 0.5 - (_cy / Red) * Mag);
+            var t = Transform;
+            ox = t.OriginX;
+            oy = t.OriginY;
         }
 
         public void Draw(Rect view, UiStyles ui)
