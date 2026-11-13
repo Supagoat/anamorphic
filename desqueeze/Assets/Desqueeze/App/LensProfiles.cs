@@ -38,6 +38,11 @@ namespace Desqueeze.App
         public DistortionFitResult LastFit { get; private set; }
         /// <summary>Incremented whenever anything about the working profile changes.</summary>
         public int Version => _version;
+        /// <summary>
+        /// Incremented when a different profile is put in use (chosen, created, imported, reverted, or none), not when the
+        /// working one is edited or saved under a new name. The calibration line editor reloads its lines when it changes.
+        /// </summary>
+        public int Selection { get; private set; }
 
         public LensProfiles(DesqueezeApp app)
         {
@@ -173,6 +178,7 @@ namespace Desqueeze.App
             _savedJson = path != null ? Canonical(p) : null;
             LastFit = null;
             _linesVersion++;
+            Selection++;
             _app.Settings.Factor = p.squeezeFactor;
             ApplyDistortionToSettings();
             Prefs.SaveSettings(_app.Settings);
@@ -187,6 +193,7 @@ namespace Desqueeze.App
             _savedJson = null;
             LastFit = null;
             _linesVersion++;
+            Selection++;
             ApplyDistortionToSettings();
             Changed();
         }
@@ -224,11 +231,54 @@ namespace Desqueeze.App
             return Working;
         }
 
-        public void Rename(string name)
+        /// <summary>
+        /// Renames the profile in use. A profile saved in the library is renamed there at once (its file follows the new
+        /// name), without saving any other change that is still pending; an unsaved one just takes the name. Returns false,
+        /// with a message, if the name is empty or another profile has it.
+        /// </summary>
+        public bool Rename(string name)
         {
-            if (Working == null || name == Working.name) return;
-            Working.name = name;
-            Changed();
+            if (Working == null) return false;
+            name = (name ?? "").Trim();
+            if (name.Length == 0)
+            {
+                _app.ShowError("A lens profile needs a name.");
+                return false;
+            }
+            if (name == Working.name) return true;
+            Library.Refresh();
+            if (Library.NameTaken(name, ActivePath))
+            {
+                _app.ShowError("There is already a lens profile called \"" + name + "\". Choose another name.");
+                return false;
+            }
+            string old = DisplayName;
+            if (ActivePath == null || !File.Exists(ActivePath))
+            {
+                Working.name = name;
+                Changed();
+                _app.ShowInfo("Renamed to \"" + name + "\". Save puts it in the library.");
+                return true;
+            }
+            try
+            {
+                var saved = LensLibrary.Load(ActivePath);       // the file as saved: other pending changes stay pending
+                saved.name = name;
+                saved.modified = Now();
+                ActivePath = Library.Save(saved, ActivePath);
+                _savedJson = Canonical(saved);
+                Working.name = name;
+                Working.modified = saved.modified;
+                Changed();
+                Autosave();
+                _app.ShowInfo("Renamed \"" + old + "\" to \"" + name + "\"" + (Modified ? ". Its other changes are not saved yet." : "."));
+                return true;
+            }
+            catch (Exception e)
+            {
+                _app.ShowError("Could not rename the profile: " + e.Message);
+                return false;
+            }
         }
 
         public void SetNotes(string notes)

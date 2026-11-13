@@ -192,8 +192,8 @@ namespace Desqueeze.App
                 GUILayout.Label(_calTool == CalTool.Distortion
                     ? "Measuring distortion. Each change is fitted at once and stored in the lens profile above (Save it there). " +
                       "Distortion Correction and Auto-crop above apply it; Preview shows the corrected photo."
-                    : "Calibrating. Change the factor above, or with the buttons over the image, until the circle " +
-                      "exactly fills the red ring. Then press Done and apply the de-squeeze.", ui.MutedSmall);
+                    : "Calibrating. Change the factor with the buttons over the image until the circle exactly fills the red ring, " +
+                      "then press Done. The de-squeeze settings come back when you leave calibration.", ui.MutedSmall);
                 if (GUILayout.Button(new GUIContent("Done", "Leave calibration and keep the factor (Esc)"), ui.Primary))
                     _app.Defer(StopCalibration);
                 return;

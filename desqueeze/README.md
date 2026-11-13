@@ -77,8 +77,9 @@ difference shows as subtly oval wheels, faces and lens flares.
    inside edge sits just outside the radius the circle really has: its size along the axis the lens didn't
    squeeze, scaled by the current split.
 5. **Change the factor until the circle exactly fills the ring**, touching its inside all the way round.
-   * Use the factor controls in the panel, the **−0.01 / −0.001 / +0.001 / +0.01** buttons over the image, or the
-     `[` and `]` keys (Shift for 0.01).
+   * Use the **−0.01 / −0.001 / +0.001 / +0.01** buttons over the image, or the `[` and `]` keys (Shift for 0.01).
+     While calibrating, the side panel shows only the lens profile (and, in the distortion tool, the distortion
+     correction): the de-squeeze settings don't apply to the photo as captured, and come back with **Done**.
    * The status bar says how far off the circle is ("0.4% too narrow (raise the factor)").
    * **Measured** shows the factor the circle implies, and **Use** sets it.
 6. **Done** (or Esc) keeps the factor. To reuse it, add it as a preset in the config file.
@@ -131,8 +132,13 @@ the side panel manages them.
   on its distortion correction. Hovering a profile shows its factor and distortion.
 * **While a profile is active, its factor is the factor in the panel.** Changing either changes both, so a
   calibrated factor lands in the profile. The **•** after the name means there are changes that aren't saved.
-* **Name** and **Notes** edit the profile. **Save** writes it to the library. **Revert** goes back to the saved
-  version, and **Save copy** saves it as a new profile.
+* **Rename** gives the profile a new name (Enter or **OK** to confirm, Esc to cancel). A profile already in the
+  library is renamed there at once, file included; other changes that aren't saved yet stay unsaved.
+* **Notes** edits the profile's notes. **Save** writes the profile to the library. **Revert** goes back to the saved
+  version. **Save copy** saves the profile as it is now, unsaved changes included, as a new profile and switches to
+  it; the original keeps what was last saved in it.
+* Switching profiles in calibration shows the chosen profile's own lines (when they were placed on a photo of the
+  same size as the one open). **Open…** in the calibration bar opens another photo at any time.
 * **New** starts an empty profile with the current factor. **Import…** copies a profile file into the library and
   uses it. **Export…** writes the profile anywhere, to share or back up. **Delete** (click twice) removes the file;
   the profile stays loaded, unsaved, so a mistake can be undone with **Save**.

@@ -39,11 +39,15 @@ namespace Desqueeze.App
         private ImageViewer.ViewState _calPickView;
 
         public bool Calibrating => _calibrating;
+        /// <summary>True while the distortion tool (lines) is the calibration tool in use.</summary>
+        public bool CalibratingDistortion => _calibrating && _calTool == CalTool.Distortion;
 
         public void StartCalibration()
         {
             if (Busy || _calibrating) return;
             _calibrating = true;
+            GUIUtility.keyboardControl = 0;     // a text field of the normal view (e.g. the path) must not keep the focus
+
             _calFit = null;
             _calPreview = null;
             _calRenderedKey = null;
@@ -100,6 +104,7 @@ namespace Desqueeze.App
             if (!_calibrating) return;
             if (_calTool == CalTool.Distortion) LeaveLineTool();
             _calibrating = false;
+            GUIUtility.keyboardControl = 0;
             _calFit = null;
             _calPreview = null;
             DisposeCalibrationLayer();
@@ -342,7 +347,9 @@ namespace Desqueeze.App
             var promptStyle = new GUIStyle(ui.Label) { wordWrap = true };
             GUILayout.Label(prompt, promptStyle, GUILayout.ExpandWidth(true));
             GUI.enabled = !Busy;
-            if (_original == null && GUILayout.Button(new GUIContent("Open…", _calTool == CalTool.Distortion ? "Open a photo of straight lines (Ctrl/Cmd+O)" : "Open a photo of a circle (Ctrl/Cmd+O)"), ui.Button, GUILayout.Width(ui.S(80))))
+            if (GUILayout.Button(new GUIContent("Open…", _calTool == CalTool.Distortion
+                    ? "Open a photo of straight lines (Ctrl/Cmd+O). The lens profile's lines are shown on it if it is the same size as the photo they were placed on."
+                    : "Open a photo of a circle (Ctrl/Cmd+O)"), ui.Button, GUILayout.Width(ui.S(80))))
                 _app.Defer(OpenWithDialog);
             if (_calTool == CalTool.Squeeze && _calFit != null && GUILayout.Button(new GUIContent("Pick another circle", "Measure a different circle"), ui.Button, GUILayout.Width(ui.S(150))))
                 _app.Defer(PickAnotherCircle);
@@ -411,7 +418,7 @@ namespace Desqueeze.App
         private bool HandleCalibrationKeys(Event e)
         {
             if (!_calibrating || e.type != EventType.KeyDown) return false;
-            if (e.keyCode == KeyCode.Escape)
+            if (e.keyCode == KeyCode.Escape && GUIUtility.keyboardControl == 0)    // while typing, Esc belongs to the text field
             {
                 if (!(_calTool == CalTool.Distortion && LineToolEscape())) _app.Defer(StopCalibration);
                 e.Use();

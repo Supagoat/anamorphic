@@ -65,6 +65,8 @@ namespace Desqueeze.App
         private int _lnEditVersion, _lnFitVersion;
         private bool _lnFitting;
         private int _lnTurnUsed;
+        private int _lnSelection = -1;          // LensProfiles.Selection the lines on screen belong to
+        private bool _lnReloadPending;
         private float _lnConfirmClearUntil;
 
         private bool _lnPreview;
@@ -130,6 +132,7 @@ namespace Desqueeze.App
             _activeLine = _selLine = _selPt = -1;
             _lnCurves = null;
             _lnCurvesKey = null;
+            _lnSelection = _app.Lenses.Selection;
             if (_original == null) return;
             int turn = SensorTurnNow;
             _lnTurnUsed = turn;
@@ -367,6 +370,14 @@ namespace Desqueeze.App
         {
             if (_original == null) return;
             int turn = SensorTurnNow;
+            if (_lnSelection != _app.Lenses.Selection && !_lnReloadPending)
+            {
+                // Another profile was chosen: show its lines, not the previous profile's. Outside OnGUI, as the controls change.
+                _lnReloadPending = true;
+                _app.Defer(ReloadLinesForProfile);
+                return;
+            }
+            if (_lnReloadPending) return;
             if (turn != _lnTurnUsed)
             {
                 _lnTurnUsed = turn;
@@ -385,10 +396,27 @@ namespace Desqueeze.App
             }
         }
 
+        /// <summary>Replaces the lines on screen with those of the profile now in use.</summary>
+        private void ReloadLinesForProfile()
+        {
+            _lnReloadPending = false;
+            if (!LineTool) return;
+            if (_lnDragging)
+            {
+                _lnDragging = false;
+                GUIUtility.hotControl = 0;
+            }
+            _lnArmed = false;
+            SetLinePreview(false);
+            if (_original != null && _viewer.Layer != _originalLayer) _viewer.Show(_originalLayer, true);
+            LoadLinesFromProfile();
+        }
+
         private async void FitLines()
         {
             _lnFitting = true;
             int version = _lnEditVersion;
+            int selection = _app.Lenses.Selection;
             int turn = SensorTurnNow;
             var cal = BuildCalibration(turn);
             double f = _app.Settings.Factor;
@@ -396,6 +424,7 @@ namespace Desqueeze.App
             {
                 var fit = await Task.Run(() => DistortionFit.Fit(cal.lines, cal.imageWidth, cal.imageHeight, f));
                 if (!LineTool || version != _lnEditVersion) return;    // edited meanwhile: the next frame fits again
+                if (selection != _app.Lenses.Selection) return;        // another profile was chosen meanwhile: these lines aren't its
                 cal.factor = f;
                 _app.Lenses.SetCalibration(cal, fit);
                 _lnFitVersion = version;

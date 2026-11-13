@@ -37,6 +37,8 @@ namespace Desqueeze.App
         private bool _messageIsError;
         private string _tooltip = "";
         private string _frameTooltip = "";
+        private Rect _tipArea;                  // the region being drawn: a tooltip counts only while the mouse is in it
+        private Vector2 _mouse;                 // mouse position at the top level, for the check
         private readonly Queue<Action> _deferred = new Queue<Action>();
 
         /// <summary>
@@ -161,6 +163,7 @@ namespace Desqueeze.App
             float scale = ComputeUiScale();
             if (!_ui.IsBuiltFor(scale)) _ui.Build(scale);
             if (Event.current.type == EventType.Repaint) _frameTooltip = "";
+            _mouse = Event.current.mousePosition;
 
             float ppp = UiStyles.PixelsPerPoint;
             var screen = new Rect(0, 0, Screen.width / ppp, Screen.height / ppp);
@@ -174,19 +177,33 @@ namespace Desqueeze.App
 
             if (_mode == Mode.Interactive) _interactive.HandleShortcuts(Event.current);
 
+            BeginTipArea(main);
             if (_mode == Mode.Interactive) _interactive.DrawMain(main, _ui);
             else _batch.DrawMain(main, _ui);
             CaptureTooltip();
 
+            BeginTipArea(top);
             DrawTopBar(top);
+            BeginTipArea(panel);
             DrawPanel(panel);
             DrawTooltip(screen);
+        }
+
+        /// <summary>
+        /// Starts a region of the window for tooltips. IMGUI also reports the tooltip of a control that has the keyboard
+        /// focus, and keeps a tooltip from controls drawn earlier, so without this a tooltip from the side panel could
+        /// follow the mouse over the image. Clearing it per region and requiring the mouse to be in the region stops that.
+        /// </summary>
+        private void BeginTipArea(Rect r)
+        {
+            _tipArea = r;
+            if (Event.current.type == EventType.Repaint) GUI.tooltip = "";
         }
 
         /// <summary>Records the hovered control's tooltip; call inside each GUILayout area before it ends.</summary>
         internal void CaptureTooltip()
         {
-            if (Event.current.type == EventType.Repaint && !string.IsNullOrEmpty(GUI.tooltip)) _frameTooltip = GUI.tooltip;
+            if (Event.current.type == EventType.Repaint && !string.IsNullOrEmpty(GUI.tooltip) && _tipArea.Contains(_mouse)) _frameTooltip = GUI.tooltip;
         }
 
         private void DrawTopBar(Rect r)
@@ -261,7 +278,17 @@ namespace Desqueeze.App
             GUI.enabled = !busy;
             var img = _mode == Mode.Interactive ? _interactive.Original : null;
             if (_lensPanel.DrawProfile(Settings, _ui)) Prefs.SaveSettings(Settings);
-            if (_panel.Draw(Settings, _ui, img)) Prefs.SaveSettings(Settings);
+            if (_mode == Mode.Interactive && _interactive.Calibrating)
+            {
+                // Calibration works on the photo as captured: the de-squeeze settings (factor, split, widening, kernel)
+                // don't apply, so they are hidden until Done. The distortion tool keeps its correction controls.
+                if (_interactive.CalibratingDistortion && _lensPanel.DrawDistortion(Settings, _ui, img)) Prefs.SaveSettings(Settings);
+                GUILayout.Space(_ui.S(6));
+                GUILayout.Label(_interactive.CalibratingDistortion
+                    ? "Lines are placed on the photo as captured. The de-squeeze settings come back when you press Done."
+                    : "The squeeze factor is set with the controls over the image. The other de-squeeze settings come back when you press Done.", _ui.MutedSmall);
+            }
+            else if (_panel.Draw(Settings, _ui, img)) Prefs.SaveSettings(Settings);
             GUI.enabled = true;
             CaptureTooltip();
             GUILayout.EndScrollView();

@@ -21,6 +21,10 @@ namespace Desqueeze.App.UI
         private readonly Action<string> _error;
         private bool _listOpen;
         private bool _notesOpen;
+        private bool _renaming, _focusRename;
+        private string _renameText = "";
+        private LensProfile _renameTarget;
+        private const string RenameField = "lensProfileRename";
         private float _confirmDeleteUntil;
 
         public LensPanel(LensProfiles profiles, Action<Action> defer, Action onChanged, Action<string> error)
@@ -51,13 +55,31 @@ namespace Desqueeze.App.UI
                 });
             if (_listOpen) DrawList(ui);
 
+            if (_renaming && p != _renameTarget) _defer(CancelRename);    // another profile was chosen meanwhile
             if (p != null)
             {
-                GUILayout.BeginHorizontal();
-                GUILayout.Label("Name", ui.Label, GUILayout.Width(ui.S(52)));
-                string n = GUILayout.TextField(p.name ?? "", 80, ui.TextField, GUILayout.ExpandWidth(true));
-                if (n != p.name) _profiles.Rename(n);
-                GUILayout.EndHorizontal();
+                if (_renaming) DrawRename(ui);
+                else
+                {
+                    GUILayout.BeginHorizontal();
+                    GUILayout.Label("Name", ui.Label, GUILayout.Width(ui.S(52)));
+                    GUILayout.Label(_profiles.DisplayName, ui.Value, GUILayout.ExpandWidth(true));
+                    if (GUILayout.Button(new GUIContent("Rename", _profiles.Saved
+                            ? "Give this profile a new name. Its file in the library is renamed at once; other unsaved changes stay unsaved."
+                            : "Give this profile a name"), ui.Button, GUILayout.Width(ui.S(76))))
+                    {
+                        string current = p.name ?? "";
+                        var target = p;
+                        _defer(() =>
+                        {
+                            _renaming = true;
+                            _renameTarget = target;
+                            _renameText = current;
+                            _focusRename = true;
+                        });
+                    }
+                    GUILayout.EndHorizontal();
+                }
                 if (_notesOpen)
                 {
                     string notes = GUILayout.TextArea(p.notes ?? "", 2000, ui.TextField, GUILayout.MinHeight(ui.S(44)));
@@ -117,9 +139,65 @@ namespace Desqueeze.App.UI
             }
             else
             {
-                GUILayout.Label("No lens profile: the factor below is used as is, without distortion correction.", ui.MutedSmall);
+                GUILayout.Label("No lens profile: the squeeze factor is used as is, without distortion correction.", ui.MutedSmall);
             }
             return false;
+        }
+
+        /// <summary>The name being edited: Enter or OK renames, Esc or Cancel leaves it as it was.</summary>
+        private void DrawRename(UiStyles ui)
+        {
+            var e = Event.current;
+            bool focused = GUI.GetNameOfFocusedControl() == RenameField;
+            if (e.type == EventType.KeyDown && focused && (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter))
+            {
+                e.Use();
+                string name = _renameText;
+                _defer(() => CommitRename(name));
+            }
+            else if (e.type == EventType.KeyDown && focused && e.keyCode == KeyCode.Escape)
+            {
+                e.Use();
+                _defer(CancelRename);
+            }
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Name", ui.Label, GUILayout.Width(ui.S(52)));
+            GUI.SetNextControlName(RenameField);
+            _renameText = GUILayout.TextField(_renameText ?? "", 80, ui.TextField, GUILayout.ExpandWidth(true));
+            if (_focusRename && e.type == EventType.Repaint)
+            {
+                _focusRename = false;
+                GUI.FocusControl(RenameField);
+            }
+            GUILayout.EndHorizontal();
+            GUILayout.BeginHorizontal();
+            GUILayout.FlexibleSpace();
+            if (GUILayout.Button(new GUIContent("OK", "Rename (Enter)"), ui.Primary, GUILayout.Width(ui.S(64))))
+            {
+                string name = _renameText;
+                _defer(() => CommitRename(name));
+            }
+            if (GUILayout.Button(new GUIContent("Cancel", "Keep the current name (Esc)"), ui.Button, GUILayout.Width(ui.S(72))))
+                _defer(CancelRename);
+            GUILayout.EndHorizontal();
+        }
+
+        private void CommitRename(string name)
+        {
+            if (_profiles.Working != _renameTarget)
+            {
+                CancelRename();
+                return;
+            }
+            if (!_profiles.Rename(name)) return;     // keeps the field open with the message
+            _renaming = false;
+            GUIUtility.keyboardControl = 0;
+        }
+
+        private void CancelRename()
+        {
+            _renaming = false;
+            GUIUtility.keyboardControl = 0;
         }
 
         private void DrawList(UiStyles ui)
