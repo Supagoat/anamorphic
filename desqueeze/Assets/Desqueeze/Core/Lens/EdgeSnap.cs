@@ -12,7 +12,10 @@ namespace Desqueeze.Core.Lens
     /// </summary>
     public static class EdgeSnap
     {
-        /// <param name="radius">How far to search, in pixels.</param>
+        /// <param name="radius">
+        /// How far the point may move, in pixels: how uncertain the click was. The point never moves further than this, so
+        /// a stronger edge a few pixels away cannot pull it off the one the user clicked.
+        /// </param>
         /// <param name="polarity">+1 / -1 to require dark-to-light / light-to-dark (down or right), 0 for either.</param>
         /// <returns>True with the snapped position and the edge's polarity; false if there is no clear edge nearby.</returns>
         public static bool Snap(PixelImage img, double x, double y, bool horizontalLine, double radius, int polarity,
@@ -22,7 +25,8 @@ namespace Desqueeze.Core.Lens
             sy = y;
             foundPolarity = 0;
             if (img == null) return false;
-            radius = Math.Max(2, radius);
+            radius = Math.Max(0.5, radius);
+            double click = horizontalLine ? y : x;
             const double sigma = 1.0;
             int margin = (int)Math.Ceiling(3 * sigma) + 1;
             int lo = (int)Math.Floor((horizontalLine ? y : x) - radius) - margin;
@@ -59,6 +63,7 @@ namespace Desqueeze.Core.Lens
             for (int i = margin; i < n - margin; i++) typical = Math.Max(typical, Math.Abs(d[i]));
             for (int i = margin; i < n - margin; i++)
             {
+                if (Math.Abs(lo + i - click) > radius + 0.5) continue;     // only edges within reach of the click
                 double v = polarity != 0 ? polarity * d[i] : Math.Abs(d[i]);
                 if (v <= 0 || v < (polarity != 0 ? polarity * d[i - 1] : Math.Abs(d[i - 1])) ||
                     v <= (polarity != 0 ? polarity * d[i + 1] : Math.Abs(d[i + 1]))) continue;
@@ -73,6 +78,7 @@ namespace Desqueeze.Core.Lens
             double off = Math.Abs(den) > 1e-12 ? 0.5 * (l - r) / den : 0;
             off = Math.Max(-0.5, Math.Min(0.5, off));
             double pos = lo + best + off;
+            if (Math.Abs(pos - click) > radius) return false;             // keep the point where it was put
             if (horizontalLine) sy = pos; else sx = pos;
             foundPolarity = d[best] > 0 ? 1 : -1;
             return true;

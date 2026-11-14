@@ -1543,6 +1543,32 @@ namespace DesqueezeBench
                 Check(!Desqueeze.Core.Lens.EdgeSnap.Snap(img, 40, 34, true, 8, -1, out sx, out sy, out pol), "snap keeps the line's polarity (no light-to-dark edge here)");
             }
 
+            // edge snapping never moves a point further than the click's uncertainty
+            {
+                // a faint edge at 30.3 (dark to a little lighter) and a strong one at 34.6 (to bright), a mortar-joint-like pair
+                var img = new PixelImage(80, 60, 1, 8);
+                const double faint = 30.3, strong = 34.6;
+                for (int y = 0; y < 60; y++)
+                    for (int x = 0; x < 80; x++)
+                    {
+                        double c1 = Math.Max(0, Math.Min(1, y + 0.5 - faint)), c2 = Math.Max(0, Math.Min(1, y + 0.5 - strong));
+                        img.Data8[y * 80 + x] = (byte)Math.Round(Srgb8(0.1 + 0.08 * c1 + 0.7 * c2));
+                    }
+                double sx, sy;
+                int pol;
+                bool wide = Desqueeze.Core.Lens.EdgeSnap.Snap(img, 40, 31, true, 8, 0, out sx, out sy, out pol);
+                Check(wide && Math.Abs(sy - strong) < 0.2, "a wide search (zoomed out) still finds the strong edge nearby (" + sy.ToString("0.00") + ")");
+                bool near = Desqueeze.Core.Lens.EdgeSnap.Snap(img, 40, 30.6, true, 0.75, 0, out sx, out sy, out pol);
+                Check(near && Math.Abs(sy - faint) < 0.2, "zoomed in, a point on the faint edge stays on it (" + sy.ToString("0.00") + ", strong edge " + strong + ")");
+                bool worst = true;
+                foreach (var r in new[] { 0.5, 0.75, 1.5, 3.0 })
+                    for (double c = 26; c <= 40; c += 0.37)
+                        if (Desqueeze.Core.Lens.EdgeSnap.Snap(img, 40, c, true, r, 0, out sx, out sy, out pol) && Math.Abs(sy - c) > r + 1e-9) worst = false;
+                Check(worst, "a snapped point never moves further than the search radius (radii 0.5-3 px, 38 clicks each)");
+                Check(!Desqueeze.Core.Lens.EdgeSnap.Snap(img, 40, 34.4, true, 0.75, -1, out sx, out sy, out pol),
+                    "zoomed in, an edge of the wrong polarity leaves the point where it was put");
+            }
+
             // profiles
             {
                 var p = new Desqueeze.Core.Lens.LensProfile

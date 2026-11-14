@@ -61,7 +61,7 @@ namespace Desqueeze.App
         private Vector2 _lnDragOffset;
         private Vector2 _lnDown;
         private bool _lnArmed;
-        private bool _snap = true;
+        private bool _snap = Prefs.GetBool("LineSnap", true);
         private int _lnEditVersion, _lnFitVersion;
         private bool _lnFitting;
         private int _lnTurnUsed;
@@ -294,11 +294,16 @@ namespace Desqueeze.App
         }
 
         /// <summary>Moves (x, y) onto the nearest edge across the line, keeping the line's edge polarity.</summary>
-        private void SnapPoint(EditLine l, ref double x, ref double y)
+        /// <summary>
+        /// With Snap on, moves a point onto the edge it was placed on, to a fraction of a pixel. It moves at most as far as
+        /// the click itself was uncertain: about 3 screen pixels, so up to a few image pixels when zoomed out and less than
+        /// one when zoomed in far enough to see the pixels. Holding Alt / Option places the point exactly.
+        /// </summary>
+        private void SnapPoint(EditLine l, ref double x, ref double y, bool exact)
         {
-            if (!_snap || _original == null) return;
+            if (!_snap || exact || _original == null) return;
             double scale = Math.Max(1e-6, _viewer.ScreenPixelsPerImagePixel);
-            double radius = Math.Max(3, Math.Min(40, 8 / scale * UiStyles.PixelsPerPoint));
+            double radius = Math.Max(0.5, Math.Min(12, 3 / scale * UiStyles.PixelsPerPoint));
             double sx, sy;
             int pol;
             if (EdgeSnap.Snap(_original, x, y, l.Horizontal, radius, l.Polarity, out sx, out sy, out pol))
@@ -309,7 +314,7 @@ namespace Desqueeze.App
             }
         }
 
-        private void AddPoint(double x, double y)
+        private void AddPoint(double x, double y, bool exact)
         {
             if (_activeLine < 0 || _activeLine >= _lines.Count)
             {
@@ -318,7 +323,7 @@ namespace Desqueeze.App
             }
             var l = _lines[_activeLine];
             PushUndo();
-            SnapPoint(l, ref x, ref y);
+            SnapPoint(l, ref x, ref y, exact);
             x = Math.Max(0, Math.Min(_original.Width - 1, x));
             y = Math.Max(0, Math.Min(_original.Height - 1, y));
             _selLine = _activeLine;
@@ -602,7 +607,7 @@ namespace Desqueeze.App
                     var l = _lines[_selLine];
                     var p = l.Points[_selPt];
                     double x = p.X, y = p.Y;
-                    SnapPoint(l, ref x, ref y);
+                    SnapPoint(l, ref x, ref y, e.alt);
                     l.Points.RemoveAt(_selPt);
                     _selPt = InsertSorted(l, new Vector2d(x, y));
                     LinesEdited();
@@ -644,8 +649,9 @@ namespace Desqueeze.App
             {
                 _lnArmed = false;
                 double x, y;
+                bool exact = e.alt;
                 if ((e.mousePosition - _lnDown).magnitude <= 5f && _viewer.GuiToImage(view, _lnDown, out x, out y))
-                    _app.Defer(() => AddPoint(x, y));
+                    _app.Defer(() => AddPoint(x, y, exact));
             }
         }
 
@@ -964,8 +970,14 @@ namespace Desqueeze.App
             }
             GUI.enabled = on;
             GUILayout.Space(ui.S(6));
-            bool snap = ui.Toggle(_snap, new GUIContent("Snap", "Move each point onto the nearest edge, to a fraction of a pixel, keeping all of a line's points on the same side of it (a mortar joint, a frame)"));
-            if (snap != _snap) _snap = snap;
+            bool snap = ui.Toggle(_snap, new GUIContent("Snap", "Fine-tune each point onto the edge you put it on, to a fraction of a pixel. It moves a point " +
+                "no further than a click can be off (under a pixel when zoomed in to see the pixels), and keeps a line's points on the same side of " +
+                "a joint or frame. Hold Alt / Option while clicking or dropping a point to place it exactly."));
+            if (snap != _snap)
+            {
+                _snap = snap;
+                Prefs.SetBool("LineSnap", snap);
+            }
             GUILayout.Space(ui.S(6));
             GUI.enabled = on && (_lnPreview || _app.Settings.ActiveDistortion() != null);
             if (GUILayout.Button(new GUIContent("Preview", "Show the photo corrected with the measured distortion at the current Distortion Correction strength, with straight lines through the corrected points (P)"),

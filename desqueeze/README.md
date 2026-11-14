@@ -182,8 +182,13 @@ straight, it works out whatever correction makes them straight, and it applies t
      also continues its line.
    * **Undo** (Ctrl/Cmd+Z) steps back, and **Clear** (click twice) removes every line.
    * Dragging the background pans, as usual.
-6. With **Snap** on (the default), each point moves onto the nearest edge to a fraction of a pixel. All of a
-   line's points stay on the same side of a mortar joint or frame.
+6. With **Snap** on (the default), each point is fine-tuned onto the edge it was placed on, to a fraction of a
+   pixel, keeping all of a line's points on the same side of a mortar joint or frame.
+   * A point moves no further than a click can be off: about 3 screen pixels. Zoomed out that is a few image
+     pixels; zoomed in far enough to see the pixels it is under one, so the point stays where you put it.
+   * If there is no matching edge that close, the point stays exactly where it was clicked or dropped.
+   * Hold **Alt / Option** while clicking or dropping a point to place it exactly, without snapping. The setting
+     is remembered.
 
 After every change the distortion is fitted again, in the background (a fraction of a second). The overlay shows:
 * the points: blue for horizontal lines, orange for vertical ones;

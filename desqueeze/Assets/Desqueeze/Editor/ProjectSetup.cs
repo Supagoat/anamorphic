@@ -61,6 +61,7 @@ namespace Desqueeze.EditorTools
             {
                 "Factor", "WidthShare", "Algorithm", "ReduceLight", "EnlargeLight", "AntiRinging", "SaveFormat", "OpenDir", "SaveDir",
                 "Mode", "BatchIn", "BatchOut", "BatchSubfolders", "BatchOverwrite", "BatchSuffix",
+                "Direction", "Widen", "DistortionAmount", "DistortionEdges", "DistortionOrder", "CalTool", "LineSnap", "ProfileDir", "LensProfilePath",
             };
             foreach (var k in keys) PlayerPrefs.DeleteKey("Desqueeze." + k);
             PlayerPrefs.Save();
