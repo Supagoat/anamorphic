@@ -24,6 +24,10 @@ On first load an editor script sets desktop-friendly player settings (windowed, 
 1600 x 1000, keeps running in the background so batches don't pause). Re-apply any time with
 **Desqueeze > Apply Recommended Player Settings**.
 
+To save battery the app draws at most 30 frames a second while you're using it, 15 when idle, and 5 when it's in
+the background with nothing to do (`App/FramePacer.cs`; vSync is off, else Unity would redraw at the display's
+full refresh rate). Jobs run on worker threads and don't wait on frames, so they aren't slowed down.
+
 > The UI is IMGUI (drawn from code), so there are no scene, prefab or UI assets to wire up, and it
 > works with the project's "Input System only" setting.
 

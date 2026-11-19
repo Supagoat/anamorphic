@@ -37,6 +37,8 @@ namespace Desqueeze.App
         private bool _messageIsError;
         private string _tooltip = "";
         private string _frameTooltip = "";
+        private readonly FramePacer _pacer = new FramePacer();
+        private bool _showTooltips = true;     // remembered (loaded in Awake)
         private Rect _tipArea;                  // the region being drawn: a tooltip counts only while the mouse is in it
         private Vector2 _mouse;                 // mouse position at the top level, for the check
         private readonly Queue<Action> _deferred = new Queue<Action>();
@@ -55,6 +57,7 @@ namespace Desqueeze.App
         private void Update()
         {
             if (_lenses != null) _lenses.Tick();
+            _pacer.Tick(_interactive.Busy || _batch.Busy);
             int n = _deferred.Count; // actions queued while running wait for the next frame
             for (int i = 0; i < n; i++)
             {
@@ -74,7 +77,8 @@ namespace Desqueeze.App
         private void Awake()
         {
             Application.runInBackground = true;   // keep batches running when the window is in the background
-            Application.targetFrameRate = 60;
+            _pacer.Start();                       // 30 fps at most, less when idle (see FramePacer)
+            _showTooltips = Prefs.GetBool("ShowTooltips", true);
             string warning;
             Config = AppConfig.Load(out warning);
             Settings = Prefs.LoadSettings(Config.CreateDefaultSettings());
@@ -160,6 +164,7 @@ namespace Desqueeze.App
 
         private void OnGUI()
         {
+            _pacer.Observe(Event.current);
             float scale = ComputeUiScale();
             if (!_ui.IsBuiltFor(scale)) _ui.Build(scale);
             if (Event.current.type == EventType.Repaint) _frameTooltip = "";
@@ -222,6 +227,12 @@ namespace Desqueeze.App
             if (GUILayout.Button(new GUIContent("Calibrate", "Measure your lens: its exact squeeze factor from a photographed circle, and its distortion from lines that should be straight"),
                     _interactive.Calibrating ? _ui.TabSelected : _ui.Tab))
                 Defer(ToggleCalibration);
+            if (GUILayout.Button(new GUIContent("Tips", _showTooltips ? "Hide these explanations when hovering over controls" : "Show explanations when hovering over controls"),
+                    _showTooltips ? _ui.TabSelected : _ui.Tab))
+            {
+                _showTooltips = !_showTooltips;
+                Prefs.SetBool("ShowTooltips", _showTooltips);
+            }
             if (GUILayout.Button(new GUIContent("Config", "Open the folder holding " + AppConfig.FileName + " (presets and defaults). Restart the app after editing."), _ui.Tab))
                 Defer(RevealConfig);
             GUILayout.EndHorizontal();
@@ -308,7 +319,7 @@ namespace Desqueeze.App
 
         private void DrawTooltip(Rect screen)
         {
-            if (Event.current.type == EventType.Repaint) _tooltip = _frameTooltip;
+            if (Event.current.type == EventType.Repaint) _tooltip = _showTooltips ? _frameTooltip : "";
             if (string.IsNullOrEmpty(_tooltip) || Event.current.type != EventType.Repaint) return;
             var content = new GUIContent(_tooltip);
             float width = _ui.S(300);
