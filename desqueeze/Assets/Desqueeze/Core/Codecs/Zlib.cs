@@ -169,27 +169,36 @@ namespace Desqueeze.Core.Codecs
                 throw new InvalidDataException("Not a valid zlib stream.");
             if ((flg & 0x20) != 0) throw new InvalidDataException("zlib preset dictionaries are not supported.");
 
-            using (var input = new MemoryStream(data, offset + 2, count - 2, false))
-            using (var ds = new DeflateStream(input, CompressionMode.Decompress))
+            try
             {
-                if (expectedLength >= 0)
+                using (var input = new MemoryStream(data, offset + 2, count - 2, false))
+                using (var ds = new DeflateStream(input, CompressionMode.Decompress))
                 {
-                    if (expectedLength > int.MaxValue) throw new InvalidDataException("Image data is too large.");
-                    var result = new byte[expectedLength];
-                    int read = 0;
-                    while (read < result.Length)
+                    if (expectedLength >= 0)
                     {
-                        int n = ds.Read(result, read, result.Length - read);
-                        if (n <= 0) throw new InvalidDataException("Image data is truncated.");
-                        read += n;
+                        if (expectedLength > int.MaxValue) throw new InvalidDataException("Image data is too large.");
+                        var result = new byte[expectedLength];
+                        int read = 0;
+                        while (read < result.Length)
+                        {
+                            int n = ds.Read(result, read, result.Length - read);
+                            if (n <= 0) throw new InvalidDataException("Image data is truncated.");
+                            read += n;
+                        }
+                        return result;
                     }
-                    return result;
+                    using (var outMs = new MemoryStream())
+                    {
+                        ds.CopyTo(outMs);
+                        return outMs.ToArray();
+                    }
                 }
-                using (var outMs = new MemoryStream())
-                {
-                    ds.CopyTo(outMs);
-                    return outMs.ToArray();
-                }
+            }
+            catch (IOException e)
+            {
+                // Damaged data: .NET's DeflateStream says so with an InvalidDataException, Mono's (Unity's) with an
+                // IOException ("Corrupted data ReadInternal"). The input is in memory, so an IOException can only mean that.
+                throw new InvalidDataException("The compressed image data is damaged.", e);
             }
         }
     }
