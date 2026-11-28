@@ -2,7 +2,7 @@
 
 A Unity (6.3) desktop app that de-squeezes photos shot through anamorphic lenses: open an image,
 inspect it pixel-perfectly, choose the anamorphic factor and how the correction is split between
-widening and shortening, apply it, and save as maximum-quality JPEG or PNG. Widening uses a
+widening and shortening, apply it, and save as maximum-quality JPEG, PNG or TIFF (8 or 16 bits). Widening uses a
 purpose-built single-axis upscaler that rebuilds detail from the fully sampled axis. Shortening uses a
 benchmarked high-quality kernel. A batch mode does the same for every image in a folder, and a
 calibration mode finds a lens' exact squeeze factor from a photographed circle and measures its distortion
@@ -42,7 +42,7 @@ full refresh rate). Jobs run on worker threads and don't wait on frames, so they
 | Pan | Drag (left or middle button), arrow keys (Shift = faster) |
 | Toggle original / result | **Original / De-squeezed** buttons or Space. Zoom and the relative position are kept, so you compare the same spot |
 | Apply | **Apply De-squeeze** (Ctrl/Cmd+Enter) - full resolution, on all cores, cancellable |
-| Save | Choose **JPG** or **PNG**, then **Save As…** (Ctrl/Cmd+S). Applies first if the settings changed |
+| Save | Choose **JPG**, **PNG** or **TIFF**, then **Save As…** (Ctrl/Cmd+S). Applies first if the settings changed |
 | Calibrate | **Calibrate** (top right): measure a lens' exact factor from a photographed circle (see [Calibration mode](#calibration-mode)) |
 
 **Pixel-perfect viewing.** Magnification is always a whole number (each image pixel becomes an
@@ -53,11 +53,38 @@ apply. The status bar shows the pixel under the cursor and its values.
 
 ## Batch mode
 
-Pick an input and an output folder. Every `.jpg/.jpeg/.png` is processed with the current settings
-and written **in its own format**: JPEG in gives maximum-quality JPEG out, PNG in gives PNG out (16-bit stays
-16-bit). Options: include subfolders (mirrors the structure), overwrite existing, file-name suffix.
+Pick an input and an output folder. Every `.jpg/.jpeg/.png/.tif/.tiff` is processed with the current settings
+and written **in its own format**: JPEG in gives maximum-quality JPEG out, PNG in gives PNG out, TIFF in gives TIFF
+out (16-bit stays 16-bit). Options: include subfolders (mirrors the structure), overwrite existing, file-name suffix.
 The originals can never be overwritten: using the input folder as output requires a suffix.
 Hidden files and macOS `._` resource forks are ignored.
+
+## TIFF files
+
+TIFFs open like JPEGs and PNGs, **TIFF** sits next to JPG and PNG for Save As, and a batch writes the TIFFs it finds
+back as TIFFs.
+
+* **Read:** 8- and 16-bit grey, grey + alpha, RGB, RGBA and 8-bit palette images; uncompressed, LZW, ZIP (Deflate)
+  or PackBits, with or without the predictor; in strips or tiles, interleaved or planar, in either byte order. A file
+  with several pages, or a thumbnail first, gives its first full-size image. Pre-multiplied alpha is turned into
+  straight alpha. Not read (the app says so): JPEG-compressed, CMYK, Lab and YCbCr TIFFs, floating-point and 1-, 2-,
+  4- or 32-bit samples, and BigTIFF (over 4 GB).
+* **Written:** lossless, ZIP-compressed with the predictor (about the size of a PNG), at the image's bit depth
+  (16-bit stays 16-bit), with straight alpha. Up to 2 GB per file.
+* **Metadata:** the ICC profile and the camera's tags (make, model, date, artist, copyright, resolution, the EXIF
+  and GPS directories, IPTC) are carried to a TIFF, PNG or JPEG output, and a JPEG's or PNG's EXIF becomes a TIFF's
+  tags. The orientation tag is applied on opening, as for JPEGs. XMP isn't carried (nor is it for JPEGs). A JPEG
+  holds at most 64 KB of EXIF, so an IPTC record that would make it larger is left out.
+
+**Tests.** `Tools/TestData/tiff` holds 46 TIFFs covering every layout above (written by Pillow/libtiff and by
+`make_tests.py`), the picture each must give, 10 files the writer must reproduce byte for byte, and 7 it must refuse.
+`tiffref.py` there is a line-for-line Python copy of `TiffCodec.cs`, checked against all of them (`run_tests.py`), and
+Pillow, tifffile and ImageMagick read what it writes the same way. The EditMode test `TiffTests` runs
+`TiffConformance` on the folder: reading (pixels, orientation, ICC, EXIF), writing (uncompressed byte for byte; ZIP
+reads back to the same file), round trips in every channel count and depth, conversions to and from PNG and JPEG
+with the metadata, the files to refuse, and 360 damaged files (each must fail with a message). It writes
+`tiff-report.txt` and the TIFFs it made (`written/`) to the folder; `check_written.py` reads those with the other
+readers.
 
 ## Calibration mode
 
@@ -491,7 +518,7 @@ read the tag and show the picture upright. Unity's JPEG decoder ignores the tag.
 
 **What the app does.**
 
-1. **On load**, the image is turned upright from its tag (JPEG APP1 or PNG eXIf, all eight EXIF
+1. **On load**, the image is turned upright from its tag (JPEG APP1, PNG eXIf or the TIFF tag, all eight EXIF
    orientations), and the tag is reset to 1 so the metadata matches the pixels. The viewer shows the
    picture the way the camera meant it.
 2. **Auto** picks the axis:
@@ -714,6 +741,8 @@ in the editor is slower than .NET 8, and an IL2CPP build is faster.
   sources aren't rounded to 8-bit first), and Huffman tables optimised per image. On test images it
   measured about 0.3 dB higher PSNR than libjpeg-turbo at quality 100 / 4:4:4, usually in a smaller file.
 * **PNG**: lossless, adaptive row filters, parallel DEFLATE. Bit depth, gray/RGB and alpha are preserved.
+* **TIFF**: lossless, ZIP with the predictor, strips compressed on all cores. Bit depth, gray/RGB and alpha are
+  preserved (see [TIFF files](#tiff-files)).
 * **Metadata**: EXIF (camera, lens, exposure, GPS) and ICC profiles are carried into the output (also
   across formats). The EXIF pixel-dimension tags are updated to the new size. The pixels are saved upright,
   so the orientation tag is 1, and the stale EXIF thumbnail is unlinked.
@@ -744,7 +773,7 @@ in the editor is slower than .NET 8, and an IL2CPP build is faster.
     "reduceLight": "Gamma",                           // Gamma | Linear | Sigmoidal
     "enlargeLight": "Sigmoidal",
     "antiRinging": 0.0,
-    "defaultSaveFormat": "jpg",
+    "defaultSaveFormat": "jpg",                       // jpg | png | tif
     "batchFileSuffix": "_desqueezed",
     "uiScale": 0,                                     // 0 = automatic (2 on Retina)
     "maxZoom": 64,
@@ -772,7 +801,7 @@ Assets/Desqueeze/
     Resampling/         kernels, axis weights, separable + EWA resamplers, light-space conversion,
                         AxisSR (the cross-axis detail widener and its model loader)
     Color/              sRGB tables, sigmoidal curve
-    Codecs/             PNG reader/writer, max-quality JPEG encoder, JPEG marker reader, EXIF reader/patcher
+    Codecs/             PNG and TIFF readers/writers, max-quality JPEG encoder, JPEG marker reader, EXIF reader/patcher
     Imaging/            PixelImage (8/16-bit, 1-4 channels), display reductions, EXIF orientations, transpose
     Batch/              folder scanning and output naming
     Calibration/        CircleFinder (finds a squeezed circle), CalibrationPreview (close-up + ring geometry)
@@ -780,6 +809,7 @@ Assets/Desqueeze/
                         TwoPassWarp (correction inside the de-squeeze), EdgeSnap, LensProfile + LensProfileJson,
                         DistortionSummary
     Resampling/WarpResampler.cs   the general warp (separable or radial Lanczos, EWA footprint, AA boundary)
+    Testing/            TiffConformance (the TIFF checks; run by Tests/TiffTests)
     Desqueezer.cs       entry point: Desqueezer.Process(image, settings, progress, cancel)
   App/                  Desqueeze.App   - Unity layer: IMGUI UI, viewer, dialogs, modes
   Editor/               player-settings helper and Desqueeze menu
@@ -791,10 +821,11 @@ Tools/QualityBenchmark/ the kernel benchmark above
 Tools/AxisSR/           training pipeline for the detail model (see its README)
 Tools/Calibration/      printable calibration chart, a simulated 1.6x photo of it, and the script that makes both
 Tools/LensProfiles/     an example lens profile measured from one of the 1.54x sample photos
+Tools/TestData/tiff/    the TIFF test files and their Python reference (see TIFF files)
 ```
 
 JPEG pixels are decoded by Unity's `ImageConversion` on the main thread. Everything else
-(PNG decode, resampling, encoding, file IO) runs on worker threads. Native file dialogs are used
+(PNG and TIFF decode, resampling, encoding, file IO) runs on worker threads. Native file dialogs are used
 in the Editor, on macOS (AppleScript), on Windows (PowerShell/WinForms) and on Linux (zenity), and
 the toolbar path fields work as a fallback anywhere.
 
@@ -817,7 +848,9 @@ tensor lookup, a 42-tap filter fetched from a table, and a 45-32-24-1 network. T
   Lanczos (see the stress test above). If an image looks wrong, choose **Kernel**.
 
 * CMYK and arithmetic-coded JPEGs aren't supported (Unity's decoder). JPEG input is 8-bit, and its
-  size is limited by the GPU's maximum texture size (16384 on most Macs). PNG has no such limits.
+  size is limited by the GPU's maximum texture size (16384 on most Macs). PNG and TIFF have no such limits.
+* TIFF: JPEG-compressed, CMYK, Lab, YCbCr, floating-point, 1/2/4/32-bit and BigTIFF files aren't read (see
+  [TIFF files](#tiff-files)).
 * Colour is assumed to use the sRGB transfer curve for linear and sigmoidal processing. ICC profiles
   are preserved but not converted.
 * The distortion model is radial, with separate horizontal and vertical terms. It has no decentring (tangential)

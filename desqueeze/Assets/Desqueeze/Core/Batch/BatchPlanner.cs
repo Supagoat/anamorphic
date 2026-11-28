@@ -141,7 +141,7 @@ namespace Desqueeze.Core.Batch
                 }
                 items.Add(item);
             }
-            if (items.Count == 0) error = "No .jpg, .jpeg or .png files found in " + input;
+            if (items.Count == 0) error = "No .jpg, .jpeg, .png, .tif or .tiff files found in " + input;
             return items;
         }
 

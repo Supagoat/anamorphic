@@ -1,0 +1,354 @@
+{
+ "format": "fisheye-friend-tiff-tests",
+ "cases": [
+  {
+   "name": "pillow-rgb8-raw",
+   "file": "test-pillow-rgb8-raw.tif",
+   "expect": "expect-pillow-rgb8-raw.png",
+   "note": "Pillow/libtiff, RGB 8-bit, raw",
+   "pillowOpens": true
+  },
+  {
+   "name": "pillow-rgb8-lzw",
+   "file": "test-pillow-rgb8-lzw.tif",
+   "expect": "expect-pillow-rgb8-lzw.png",
+   "note": "Pillow/libtiff, RGB 8-bit, tiff_lzw",
+   "pillowOpens": true
+  },
+  {
+   "name": "pillow-rgb8-adobe_deflate",
+   "file": "test-pillow-rgb8-adobe_deflate.tif",
+   "expect": "expect-pillow-rgb8-adobe_deflate.png",
+   "note": "Pillow/libtiff, RGB 8-bit, tiff_adobe_deflate",
+   "pillowOpens": true
+  },
+  {
+   "name": "pillow-rgb8-packbits",
+   "file": "test-pillow-rgb8-packbits.tif",
+   "expect": "expect-pillow-rgb8-packbits.png",
+   "note": "Pillow/libtiff, RGB 8-bit, packbits",
+   "pillowOpens": true
+  },
+  {
+   "name": "pillow-l8-raw",
+   "file": "test-pillow-l8-raw.tif",
+   "expect": "expect-pillow-l8-raw.png",
+   "note": "Pillow/libtiff, L 8-bit, raw",
+   "pillowOpens": true
+  },
+  {
+   "name": "pillow-l8-lzw",
+   "file": "test-pillow-l8-lzw.tif",
+   "expect": "expect-pillow-l8-lzw.png",
+   "note": "Pillow/libtiff, L 8-bit, tiff_lzw",
+   "pillowOpens": true
+  },
+  {
+   "name": "pillow-l8-adobe_deflate",
+   "file": "test-pillow-l8-adobe_deflate.tif",
+   "expect": "expect-pillow-l8-adobe_deflate.png",
+   "note": "Pillow/libtiff, L 8-bit, tiff_adobe_deflate",
+   "pillowOpens": true
+  },
+  {
+   "name": "pillow-l8-packbits",
+   "file": "test-pillow-l8-packbits.tif",
+   "expect": "expect-pillow-l8-packbits.png",
+   "note": "Pillow/libtiff, L 8-bit, packbits",
+   "pillowOpens": true
+  },
+  {
+   "name": "pillow-rgba8-raw",
+   "file": "test-pillow-rgba8-raw.tif",
+   "expect": "expect-pillow-rgba8-raw.png",
+   "note": "Pillow/libtiff, RGBA 8-bit, raw",
+   "pillowOpens": true
+  },
+  {
+   "name": "pillow-rgba8-lzw",
+   "file": "test-pillow-rgba8-lzw.tif",
+   "expect": "expect-pillow-rgba8-lzw.png",
+   "note": "Pillow/libtiff, RGBA 8-bit, tiff_lzw",
+   "pillowOpens": true
+  },
+  {
+   "name": "pillow-rgba8-adobe_deflate",
+   "file": "test-pillow-rgba8-adobe_deflate.tif",
+   "expect": "expect-pillow-rgba8-adobe_deflate.png",
+   "note": "Pillow/libtiff, RGBA 8-bit, tiff_adobe_deflate",
+   "pillowOpens": true
+  },
+  {
+   "name": "pillow-rgba8-packbits",
+   "file": "test-pillow-rgba8-packbits.tif",
+   "expect": "expect-pillow-rgba8-packbits.png",
+   "note": "Pillow/libtiff, RGBA 8-bit, packbits",
+   "pillowOpens": true
+  },
+  {
+   "name": "pillow-la8-raw",
+   "file": "test-pillow-la8-raw.tif",
+   "expect": "expect-pillow-la8-raw.png",
+   "note": "Pillow/libtiff, LA 8-bit, raw",
+   "pillowOpens": true
+  },
+  {
+   "name": "pillow-la8-lzw",
+   "file": "test-pillow-la8-lzw.tif",
+   "expect": "expect-pillow-la8-lzw.png",
+   "note": "Pillow/libtiff, LA 8-bit, tiff_lzw",
+   "pillowOpens": true
+  },
+  {
+   "name": "pillow-la8-adobe_deflate",
+   "file": "test-pillow-la8-adobe_deflate.tif",
+   "expect": "expect-pillow-la8-adobe_deflate.png",
+   "note": "Pillow/libtiff, LA 8-bit, tiff_adobe_deflate",
+   "pillowOpens": true
+  },
+  {
+   "name": "pillow-la8-packbits",
+   "file": "test-pillow-la8-packbits.tif",
+   "expect": "expect-pillow-la8-packbits.png",
+   "note": "Pillow/libtiff, LA 8-bit, packbits",
+   "pillowOpens": true
+  },
+  {
+   "name": "pillow-rgb8-lzw-predictor",
+   "file": "test-pillow-rgb8-lzw-predictor.tif",
+   "expect": "expect-pillow-rgb8-lzw-predictor.png",
+   "note": "Pillow/libtiff, RGB 8-bit, LZW with predictor",
+   "pillowOpens": true
+  },
+  {
+   "name": "pillow-gray16-raw",
+   "file": "test-pillow-gray16-raw.tif",
+   "expect": "expect-pillow-gray16-raw.png",
+   "note": "Pillow/libtiff, grey 16-bit, raw",
+   "pillowOpens": true
+  },
+  {
+   "name": "pillow-gray16-lzw",
+   "file": "test-pillow-gray16-lzw.tif",
+   "expect": "expect-pillow-gray16-lzw.png",
+   "note": "Pillow/libtiff, grey 16-bit, tiff_lzw",
+   "pillowOpens": true
+  },
+  {
+   "name": "pillow-gray16-adobe_deflate",
+   "file": "test-pillow-gray16-adobe_deflate.tif",
+   "expect": "expect-pillow-gray16-adobe_deflate.png",
+   "note": "Pillow/libtiff, grey 16-bit, tiff_adobe_deflate",
+   "pillowOpens": true
+  },
+  {
+   "name": "pillow-palette8-lzw",
+   "file": "test-pillow-palette8-lzw.tif",
+   "expect": "expect-pillow-palette8-lzw.png",
+   "note": "Pillow/libtiff, 8-bit palette, LZW",
+   "pillowOpens": true
+  },
+  {
+   "name": "rgb16-le-none",
+   "file": "test-rgb16-le-none.tif",
+   "expect": "expect-rgb16-le-none.png",
+   "note": "written here: 3 ch, 16-bit, LE, compression 1, predictor 1, planar 1, strips of 5",
+   "pillowOpens": true
+  },
+  {
+   "name": "rgb16-be-none",
+   "file": "test-rgb16-be-none.tif",
+   "expect": "expect-rgb16-be-none.png",
+   "note": "written here: 3 ch, 16-bit, BE, compression 1, predictor 1, planar 1, strips of 5",
+   "pillowOpens": true
+  },
+  {
+   "name": "rgb16-le-lzw-pred",
+   "file": "test-rgb16-le-lzw-pred.tif",
+   "expect": "expect-rgb16-le-lzw-pred.png",
+   "note": "written here: 3 ch, 16-bit, LE, compression 5, predictor 2, planar 1, strips of 8",
+   "pillowOpens": true
+  },
+  {
+   "name": "rgb16-be-lzw-pred",
+   "file": "test-rgb16-be-lzw-pred.tif",
+   "expect": "expect-rgb16-be-lzw-pred.png",
+   "note": "written here: 3 ch, 16-bit, BE, compression 5, predictor 2, planar 1, strips of 8",
+   "pillowOpens": true
+  },
+  {
+   "name": "rgba16-le-deflate-pred",
+   "file": "test-rgba16-le-deflate-pred.tif",
+   "expect": "expect-rgba16-le-deflate-pred.png",
+   "note": "written here: 4 ch, 16-bit, LE, compression 8, predictor 2, planar 1, strips of 4",
+   "pillowOpens": true
+  },
+  {
+   "name": "rgba16-be-deflate-pred",
+   "file": "test-rgba16-be-deflate-pred.tif",
+   "expect": "expect-rgba16-be-deflate-pred.png",
+   "note": "written here: 4 ch, 16-bit, BE, compression 8, predictor 2, planar 1, strips of 4",
+   "pillowOpens": true
+  },
+  {
+   "name": "gray16-be-lzw-pred",
+   "file": "test-gray16-be-lzw-pred.tif",
+   "expect": "expect-gray16-be-lzw-pred.png",
+   "note": "written here: 1 ch, 16-bit, BE, compression 5, predictor 2, planar 1, strips of 7",
+   "pillowOpens": true
+  },
+  {
+   "name": "la16-le-packbits",
+   "file": "test-la16-le-packbits.tif",
+   "expect": "expect-la16-le-packbits.png",
+   "note": "written here: 2 ch, 16-bit, LE, compression 32773, predictor 1, planar 1, strips of 6",
+   "pillowOpens": false,
+   "pillowError": "cannot identify image file 'out/test-la16-le-packbits.tif'"
+  },
+  {
+   "name": "rgb8-be-lzw-pred",
+   "file": "test-rgb8-be-lzw-pred.tif",
+   "expect": "expect-rgb8-be-lzw-pred.png",
+   "note": "written here: 3 ch, 8-bit, BE, compression 5, predictor 2, planar 1, strips of 3",
+   "pillowOpens": true
+  },
+  {
+   "name": "rgb8-planar-lzw",
+   "file": "test-rgb8-planar-lzw.tif",
+   "expect": "expect-rgb8-planar-lzw.png",
+   "note": "written here: 3 ch, 8-bit, LE, compression 5, predictor 1, planar 2, strips of 6",
+   "pillowOpens": true
+  },
+  {
+   "name": "rgb16-planar-deflate-pred",
+   "file": "test-rgb16-planar-deflate-pred.tif",
+   "expect": "expect-rgb16-planar-deflate-pred.png",
+   "note": "written here: 3 ch, 16-bit, LE, compression 8, predictor 2, planar 2, strips of 6",
+   "pillowOpens": true
+  },
+  {
+   "name": "rgba8-planar-be-packbits",
+   "file": "test-rgba8-planar-be-packbits.tif",
+   "expect": "expect-rgba8-planar-be-packbits.png",
+   "note": "written here: 4 ch, 8-bit, BE, compression 32773, predictor 1, planar 2, strips of 9",
+   "pillowOpens": true
+  },
+  {
+   "name": "rgb8-tiled-deflate",
+   "file": "test-rgb8-tiled-deflate.tif",
+   "expect": "expect-rgb8-tiled-deflate.png",
+   "note": "written here: 3 ch, 8-bit, LE, compression 8, predictor 1, planar 1, tiles (16, 16)",
+   "pillowOpens": true
+  },
+  {
+   "name": "rgb16-tiled-be-lzw-pred",
+   "file": "test-rgb16-tiled-be-lzw-pred.tif",
+   "expect": "expect-rgb16-tiled-be-lzw-pred.png",
+   "note": "written here: 3 ch, 16-bit, BE, compression 5, predictor 2, planar 1, tiles (16, 16)",
+   "pillowOpens": true
+  },
+  {
+   "name": "rgba16-tiled-planar-lzw-pred",
+   "file": "test-rgba16-tiled-planar-lzw-pred.tif",
+   "expect": "expect-rgba16-tiled-planar-lzw-pred.png",
+   "note": "written here: 4 ch, 16-bit, LE, compression 5, predictor 2, planar 2, tiles (16, 16)",
+   "pillowOpens": true
+  },
+  {
+   "name": "gray8-tiled-none",
+   "file": "test-gray8-tiled-none.tif",
+   "expect": "expect-gray8-tiled-none.png",
+   "note": "written here: 1 ch, 8-bit, LE, compression 1, predictor 1, planar 1, tiles (32, 16)",
+   "pillowOpens": true
+  },
+  {
+   "name": "big-rgb16-lzw-pred",
+   "file": "test-big-rgb16-lzw-pred.tif",
+   "expect": "expect-big-rgb16-lzw-pred.png",
+   "note": "301 x 203 RGB 16-bit LZW with predictor, strips of 64 rows",
+   "pillowOpens": true
+  },
+  {
+   "name": "big-gray8-be-lzw",
+   "file": "test-big-gray8-be-lzw.tif",
+   "expect": "expect-big-gray8-be-lzw.png",
+   "note": "613 x 401 grey 8-bit, big-endian, one LZW strip (the table fills many times)",
+   "pillowOpens": true
+  },
+  {
+   "name": "rgba16-associated",
+   "file": "test-rgba16-associated.tif",
+   "expect": "expect-rgba16-associated.png",
+   "note": "pre-multiplied (associated) alpha, 16-bit: decoded to straight alpha",
+   "pillowOpens": true
+  },
+  {
+   "name": "gray8-whiteiszero",
+   "file": "test-gray8-whiteiszero.tif",
+   "expect": "expect-gray8-whiteiszero.png",
+   "note": "WhiteIsZero grey: inverted on reading",
+   "pillowOpens": true
+  },
+  {
+   "name": "rgb8-thumbnail-first",
+   "file": "test-rgb8-thumbnail-first.tif",
+   "expect": "expect-rgb8-thumbnail-first.png",
+   "note": "a reduced-size image first: the full-size one must be read",
+   "pillowOpens": true
+  },
+  {
+   "name": "rgb16-orient6-exif-icc-le",
+   "file": "test-rgb16-orient6-exif-icc-le.tif",
+   "expect": "expect-rgb16-orient6-exif-icc-le.png",
+   "note": "orientation 6 (turned upright on reading), EXIF + GPS + interop directories, ICC profile, little-endian",
+   "sourceOrientation": 6,
+   "iccLength": 784,
+   "exifStrings": [
+    "TestCam",
+    "T-1 Mark II",
+    "2026:11:26 12:00:00",
+    "A. Photographer",
+    "(c) test",
+    "R98",
+    "IPTC-caption"
+   ],
+   "pillowOpens": true
+  },
+  {
+   "name": "rgb16-orient6-exif-icc-be",
+   "file": "test-rgb16-orient6-exif-icc-be.tif",
+   "expect": "expect-rgb16-orient6-exif-icc-be.png",
+   "note": "orientation 6 (turned upright on reading), EXIF + GPS + interop directories, ICC profile, big-endian",
+   "sourceOrientation": 6,
+   "iccLength": 784,
+   "exifStrings": [
+    "TestCam",
+    "T-1 Mark II",
+    "2026:11:26 12:00:00",
+    "A. Photographer",
+    "(c) test",
+    "R98",
+    "IPTC-caption"
+   ],
+   "pillowOpens": true
+  },
+  {
+   "name": "rgb8-big-iptc",
+   "file": "test-rgb8-big-iptc.tif",
+   "expect": "expect-rgb8-big-iptc.png",
+   "note": "a 70 KB IPTC record: dropped so the EXIF still fits a JPEG; the rest is kept",
+   "exifStrings": [
+    "TestCam"
+   ],
+   "exifMax": 65000,
+   "pillowOpens": true
+  },
+  {
+   "name": "wide-rgba16-strips",
+   "file": "test-wide-rgba16-strips.tif",
+   "expect": "expect-wide-rgba16-strips.png",
+   "note": "700 x 400 RGBA 16-bit in 11 strips: the written copy has 3 strips",
+   "pillowOpens": true
+  }
+ ]
+}

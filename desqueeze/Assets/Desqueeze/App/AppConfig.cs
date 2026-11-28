@@ -69,7 +69,7 @@ namespace Desqueeze.App
         public string enlargeLight = "Sigmoidal";
         public float antiRinging = 0f;
 
-        /// <summary>"jpg" or "png" for interactive Save As.</summary>
+        /// <summary>"jpg", "png" or "tif" for interactive Save As.</summary>
         public string defaultSaveFormat = "jpg";
         public string batchFileSuffix = "_desqueezed";
 
@@ -134,7 +134,8 @@ namespace Desqueeze.App
             if (maxZoom > 256) maxZoom = 256;
             if (uiScale < 0 || uiScale > 4) uiScale = 0;
             defaultSaveFormat = (defaultSaveFormat ?? "jpg").Trim().TrimStart('.').ToLowerInvariant();
-            if (defaultSaveFormat != "png") defaultSaveFormat = "jpg";
+            if (defaultSaveFormat == "tiff") defaultSaveFormat = "tif";
+            if (defaultSaveFormat != "png" && defaultSaveFormat != "tif") defaultSaveFormat = "jpg";
             if (batchFileSuffix == null) batchFileSuffix = "";
         }
 

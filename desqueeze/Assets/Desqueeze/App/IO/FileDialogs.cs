@@ -22,13 +22,14 @@ namespace Desqueeze.App.IO
         {
             Jpeg,
             Png,
+            Tiff,
         }
 
         public static Task<string> OpenImageAsync(string title, string startDir)
         {
 #if UNITY_EDITOR
             string p = UnityEditor.EditorUtility.OpenFilePanelWithFilters(title, ExistingDir(startDir) ?? "",
-                new[] { "Images", "jpg,jpeg,png,JPG,JPEG,PNG" });
+                new[] { "Images", "jpg,jpeg,png,tif,tiff,JPG,JPEG,PNG,TIF,TIFF" });
             return Task.FromResult(string.IsNullOrEmpty(p) ? null : p);
 #else
             return RunExternalAsync("open", title, ExistingDir(startDir), null, SaveFormat.Jpeg);
@@ -48,7 +49,7 @@ namespace Desqueeze.App.IO
         public static Task<string> SaveImageAsync(string title, string startDir, string defaultName, SaveFormat format)
         {
 #if UNITY_EDITOR
-            string ext = format == SaveFormat.Png ? "png" : "jpg";
+            string ext = format == SaveFormat.Png ? "png" : format == SaveFormat.Tiff ? "tif" : "jpg";
             string p = UnityEditor.EditorUtility.SaveFilePanel(title, ExistingDir(startDir) ?? "",
                 Path.GetFileNameWithoutExtension(defaultName), ext);
             return Task.FromResult(string.IsNullOrEmpty(p) ? null : p);
@@ -144,9 +145,9 @@ activate
 try
 	if k is ""open"" then
 		if d is """" then
-			set f to choose file with prompt p of type {""public.jpeg"", ""public.png""}
+			set f to choose file with prompt p of type {""public.jpeg"", ""public.png"", ""public.tiff""}
 		else
-			set f to choose file with prompt p of type {""public.jpeg"", ""public.png""} default location (POSIX file d as alias)
+			set f to choose file with prompt p of type {""public.jpeg"", ""public.png"", ""public.tiff""} default location (POSIX file d as alias)
 		end if
 	else if k is ""openprofile"" then
 		if d is """" then
@@ -207,14 +208,14 @@ if ($kind -eq 'folder') {
 } elseif ($kind -eq 'open' -or $kind -eq 'openprofile') {
   $d = New-Object System.Windows.Forms.OpenFileDialog
   $d.Title = $prompt
-  if ($kind -eq 'open') { $d.Filter = 'Images (*.jpg;*.jpeg;*.png)|*.jpg;*.jpeg;*.png' } else { $d.Filter = 'Lens profiles (*.json)|*.json' }
+  if ($kind -eq 'open') { $d.Filter = 'Images (*.jpg;*.jpeg;*.png;*.tif;*.tiff)|*.jpg;*.jpeg;*.png;*.tif;*.tiff' } else { $d.Filter = 'Lens profiles (*.json)|*.json' }
   if ($dir) { $d.InitialDirectory = $dir }
   if ($d.ShowDialog($owner) -eq 'OK') { [Console]::Out.Write($d.FileName) }
 } else {
   $d = New-Object System.Windows.Forms.SaveFileDialog
   $d.Title = $prompt
   if ($kind -eq 'saveprofile') { $d.Filter = 'Lens profiles (*.json)|*.json'; $d.DefaultExt = 'json' }
-  else { $d.Filter = 'JPEG (*.jpg)|*.jpg|PNG (*.png)|*.png'; $d.FilterIndex = [int]$env:DESQ_FILTER }
+  else { $d.Filter = 'JPEG (*.jpg)|*.jpg|PNG (*.png)|*.png|TIFF (*.tif)|*.tif'; $d.FilterIndex = [int]$env:DESQ_FILTER }
   $d.FileName = $env:DESQ_NAME
   if ($dir) { $d.InitialDirectory = $dir }
   if ($d.ShowDialog($owner) -eq 'OK') { [Console]::Out.Write($d.FileName) }
@@ -234,7 +235,7 @@ if ($kind -eq 'folder') {
             psi.EnvironmentVariables["DESQ_PROMPT"] = title ?? "";
             psi.EnvironmentVariables["DESQ_DIR"] = dir ?? "";
             psi.EnvironmentVariables["DESQ_NAME"] = name ?? "";
-            psi.EnvironmentVariables["DESQ_FILTER"] = format == SaveFormat.Png ? "2" : "1";
+            psi.EnvironmentVariables["DESQ_FILTER"] = format == SaveFormat.Png ? "2" : format == SaveFormat.Tiff ? "3" : "1";
             return RunProcess(psi, null);
         }
 
@@ -249,7 +250,7 @@ if ($kind -eq 'folder') {
             }
             else if (kind == "open" || kind == "openprofile")
             {
-                sb.Append(" --file-filter=").Append(Quote(kind == "open" ? "Images | *.jpg *.jpeg *.png *.JPG *.JPEG *.PNG" : "Lens profiles | *.json *.JSON"));
+                sb.Append(" --file-filter=").Append(Quote(kind == "open" ? "Images | *.jpg *.jpeg *.png *.tif *.tiff *.JPG *.JPEG *.PNG *.TIF *.TIFF" : "Lens profiles | *.json *.JSON"));
                 if (dir != null) sb.Append(" --filename=").Append(Quote(dir + "/"));
             }
             else

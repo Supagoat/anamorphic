@@ -9,6 +9,7 @@ namespace Desqueeze.Core.Imaging
         Unknown = 0,
         Png = 1,
         Jpeg = 2,
+        Tiff = 3,
     }
 
     /// <summary>
@@ -24,7 +25,7 @@ namespace Desqueeze.Core.Imaging
         public byte[] Data8 { get; }
         public ushort[] Data16 { get; }
 
-        /// <summary>Metadata carried from the source file (ICC profile, EXIF, PNG ancillary chunks).</summary>
+        /// <summary>Metadata carried from the source file (ICC profile, EXIF - for a TIFF its descriptive tags -, PNG ancillary chunks).</summary>
         public ImageMetadata Metadata { get; set; } = new ImageMetadata();
 
         /// <summary>The file format this image was decoded from, if any.</summary>

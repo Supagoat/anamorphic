@@ -35,8 +35,8 @@ namespace Desqueeze.App
         {
             _app = app;
             _viewer.SetMaxZoom(app.Config.maxZoom);
-            _saveFormat = app.Config.defaultSaveFormat == "png" ? FileDialogs.SaveFormat.Png : FileDialogs.SaveFormat.Jpeg;
-            _saveFormat = Prefs.GetString("SaveFormat", _saveFormat.ToString()) == "Png" ? FileDialogs.SaveFormat.Png : FileDialogs.SaveFormat.Jpeg;
+            _saveFormat = ParseSaveFormat(app.Config.defaultSaveFormat, FileDialogs.SaveFormat.Jpeg);
+            _saveFormat = ParseSaveFormat(Prefs.GetString("SaveFormat", _saveFormat.ToString()), _saveFormat);
         }
 
         public bool Busy => _busy != null;
@@ -104,7 +104,7 @@ namespace Desqueeze.App
                 ? (_calTool == CalTool.Distortion
                     ? "Open a photo of straight lines taken through the lens: a brick wall, a building, a grid\n(Open… above, or Ctrl/Cmd+O)"
                     : "Open a photo of a circle taken through the lens\n(Open… above, or Ctrl/Cmd+O)")
-                : "Open a JPEG or PNG shot through an anamorphic lens\n(Open…, or type a path above and press Enter)", style);
+                : "Open a JPEG, PNG or TIFF shot through an anamorphic lens\n(Open…, or type a path above and press Enter)", style);
         }
 
         private void DrawToolbar(Rect r, UiStyles ui)
@@ -211,6 +211,8 @@ namespace Desqueeze.App
                 SetSaveFormat(FileDialogs.SaveFormat.Jpeg);
             if (GUILayout.Button(new GUIContent("PNG", "Lossless PNG; 16-bit sources stay 16-bit"), _saveFormat == FileDialogs.SaveFormat.Png ? ui.ButtonSelected : ui.Button))
                 SetSaveFormat(FileDialogs.SaveFormat.Png);
+            if (GUILayout.Button(new GUIContent("TIFF", "Lossless TIFF (ZIP compression); 16-bit sources stay 16-bit"), _saveFormat == FileDialogs.SaveFormat.Tiff ? ui.ButtonSelected : ui.Button))
+                SetSaveFormat(FileDialogs.SaveFormat.Tiff);
             GUILayout.EndHorizontal();
             if (GUILayout.Button(new GUIContent("Save As…", "Save the de-squeezed image (Ctrl/Cmd+S). Applies first if needed."), ui.Button))
                 _app.Defer(SaveAs);
@@ -224,6 +226,29 @@ namespace Desqueeze.App
         {
             _saveFormat = f;
             Prefs.SetString("SaveFormat", f.ToString());
+        }
+
+        /// <summary>A save format from the config ("jpg", "png", "tif") or the prefs ("Jpeg", "Png", "Tiff").</summary>
+        private static FileDialogs.SaveFormat ParseSaveFormat(string s, FileDialogs.SaveFormat fallback)
+        {
+            switch ((s ?? "").Trim().TrimStart('.').ToLowerInvariant())
+            {
+                case "jpg":
+                case "jpeg":
+                    return FileDialogs.SaveFormat.Jpeg;
+                case "png":
+                    return FileDialogs.SaveFormat.Png;
+                case "tif":
+                case "tiff":
+                    return FileDialogs.SaveFormat.Tiff;
+                default:
+                    return fallback;
+            }
+        }
+
+        private static ImageFileFormat FileFormat(FileDialogs.SaveFormat f)
+        {
+            return f == FileDialogs.SaveFormat.Png ? ImageFileFormat.Png : f == FileDialogs.SaveFormat.Tiff ? ImageFileFormat.Tiff : ImageFileFormat.Jpeg;
         }
 
         private void SetShowResult(bool show)
@@ -397,7 +422,7 @@ namespace Desqueeze.App
                 if (!ResultIsCurrent) return;
             }
             string dir = Prefs.GetString("SaveDir", Path.GetDirectoryName(_path));
-            string ext = _saveFormat == FileDialogs.SaveFormat.Png ? ".png" : ".jpg";
+            string ext = ImageIO.DefaultExtension(FileFormat(_saveFormat));
             string name = Path.GetFileNameWithoutExtension(_path) + _app.Config.batchFileSuffix + ext;
             if (string.IsNullOrEmpty(_app.Config.batchFileSuffix)) name = Path.GetFileNameWithoutExtension(_path) + "_desqueezed" + ext;
             string target = await FileDialogs.SaveImageAsync("Save de-squeezed image", dir, name, _saveFormat);
@@ -407,7 +432,7 @@ namespace Desqueeze.App
             var fmt = ImageIO.FormatFromExtension(target);
             if (fmt == ImageFileFormat.Unknown)
             {
-                fmt = _saveFormat == FileDialogs.SaveFormat.Png ? ImageFileFormat.Png : ImageFileFormat.Jpeg;
+                fmt = FileFormat(_saveFormat);
                 target += ImageIO.DefaultExtension(fmt);
             }
             if (string.Equals(Path.GetFullPath(target), Path.GetFullPath(_path), StringComparison.OrdinalIgnoreCase))
@@ -429,7 +454,7 @@ namespace Desqueeze.App
                 });
                 Prefs.SetString("SaveDir", Path.GetDirectoryName(target));
                 _lastSaved = Path.GetFileName(target);
-                _app.ShowInfo("Saved " + target + (fmt == ImageFileFormat.Jpeg ? " (JPEG Q100, 4:4:4)" : " (PNG)"));
+                _app.ShowInfo("Saved " + target + (fmt == ImageFileFormat.Jpeg ? " (JPEG Q100, 4:4:4)" : fmt == ImageFileFormat.Tiff ? " (TIFF, " + img.BitDepth + "-bit, ZIP)" : " (PNG)"));
             }
             catch (Exception e)
             {

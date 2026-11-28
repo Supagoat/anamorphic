@@ -9,8 +9,8 @@ using UnityEngine;
 namespace Desqueeze.App.IO
 {
     /// <summary>
-    /// Loads JPEG and PNG files into an upright <see cref="PixelImage"/>.
-    /// PNG uses the core decoder (16-bit preserved) on a worker thread. JPEG pixels are decoded with
+    /// Loads JPEG, PNG and TIFF files into an upright <see cref="PixelImage"/>.
+    /// PNG and TIFF use the core decoders (16-bit preserved) on a worker thread. JPEG pixels are decoded with
     /// Unity's ImageConversion, which must run on the main thread, so <see cref="LoadAsync"/> must be
     /// awaited from the main thread. EXIF and ICC data are kept for writing back out.
     /// Images are turned upright from their EXIF orientation tag (Unity's decoder ignores it), the tag is
@@ -30,6 +30,9 @@ namespace Desqueeze.App.IO
             if (format == ImageFileFormat.Png)
                 return await Task.Run(() => ImageIO.MakeUpright(PngCodec.Decode(bytes)), ct);
 
+            if (format == ImageFileFormat.Tiff)
+                return await Task.Run(() => ImageIO.MakeUpright(TiffCodec.Decode(bytes)), ct);
+
             if (format == ImageFileFormat.Jpeg)
             {
                 JpegInfo info = JpegInfo.Read(bytes);
@@ -47,7 +50,7 @@ namespace Desqueeze.App.IO
                 bool decoderTurned = info.Width != info.Height && w == info.Height && h == info.Width;
                 return await Task.Run(() => ImageIO.MakeUpright(FromColor32(px, w, h, info), decoderTurned), ct);
             }
-            throw new InvalidDataException("Not a JPEG or PNG file.");
+            throw new InvalidDataException("Not a JPEG, PNG or TIFF file.");
         }
 
         private static Color32[] DecodeJpegOnMainThread(byte[] bytes, out int w, out int h)

@@ -7,15 +7,16 @@ using Desqueeze.Core.Imaging;
 
 namespace Desqueeze.Core.Codecs
 {
-    /// <summary>Format detection and encoding to the output formats (PNG / max-quality JPEG).</summary>
+    /// <summary>Format detection and encoding to the output formats (PNG / max-quality JPEG / TIFF).</summary>
     public static class ImageIO
     {
-        public static readonly string[] SupportedExtensions = { ".jpg", ".jpeg", ".png" };
+        public static readonly string[] SupportedExtensions = { ".jpg", ".jpeg", ".png", ".tif", ".tiff" };
 
         public static ImageFileFormat DetectFormat(byte[] data)
         {
             if (PngCodec.IsPng(data)) return ImageFileFormat.Png;
             if (JpegInfo.IsJpeg(data)) return ImageFileFormat.Jpeg;
+            if (TiffCodec.IsTiff(data)) return ImageFileFormat.Tiff;
             return ImageFileFormat.Unknown;
         }
 
@@ -24,6 +25,7 @@ namespace Desqueeze.Core.Codecs
             string ext = (Path.GetExtension(path) ?? "").ToLowerInvariant();
             if (ext == ".png") return ImageFileFormat.Png;
             if (ext == ".jpg" || ext == ".jpeg") return ImageFileFormat.Jpeg;
+            if (ext == ".tif" || ext == ".tiff") return ImageFileFormat.Tiff;
             return ImageFileFormat.Unknown;
         }
 
@@ -34,11 +36,11 @@ namespace Desqueeze.Core.Codecs
 
         public static string DefaultExtension(ImageFileFormat f)
         {
-            return f == ImageFileFormat.Png ? ".png" : ".jpg";
+            return f == ImageFileFormat.Png ? ".png" : f == ImageFileFormat.Tiff ? ".tif" : ".jpg";
         }
 
         /// <summary>
-        /// Turns a freshly decoded image upright according to its EXIF orientation tag (JPEG APP1 or PNG eXIf),
+        /// Turns a freshly decoded image upright according to its EXIF orientation tag (JPEG APP1, PNG eXIf or the TIFF tag),
         /// resets the tag to 1 so the metadata matches the pixels, and records the original tag in
         /// <see cref="ImageMetadata.SourceOrientation"/>. Returns the upright image (the same instance when no
         /// turn was needed). Pass <paramref name="pixelsAlreadyUpright"/> when the decoder has already applied the
@@ -93,7 +95,8 @@ namespace Desqueeze.Core.Codecs
         }
 
         /// <summary>
-        /// Encodes an image. JPEG is always written at maximum quality (Q100, 4:4:4, optimised Huffman).
+        /// Encodes an image. JPEG is always written at maximum quality (Q100, 4:4:4, optimised Huffman); TIFF is
+        /// lossless (ZIP), at the image's bit depth.
         /// EXIF pixel-dimension tags are updated to the image's size and the embedded EXIF thumbnail (a stale,
         /// squeezed copy) is unlinked; ICC/EXIF/ancillary data is otherwise preserved.
         /// </summary>
@@ -127,6 +130,8 @@ namespace Desqueeze.Core.Codecs
                     return PngCodec.Encode(img);
                 case ImageFileFormat.Jpeg:
                     return JpegEncoder.Encode(img, new JpegEncodeOptions { Quality = 100 });
+                case ImageFileFormat.Tiff:
+                    return TiffCodec.Encode(img);
                 default:
                     throw new ArgumentException("Unsupported output format " + format + ".");
             }

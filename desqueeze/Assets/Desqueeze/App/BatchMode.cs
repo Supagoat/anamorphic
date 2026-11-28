@@ -15,8 +15,8 @@ using UnityEngine;
 namespace Desqueeze.App
 {
     /// <summary>
-    /// Applies the current settings to every JPEG/PNG in a folder. Each output keeps its input's
-    /// format: JPEG in -> maximum-quality JPEG out, PNG in -> PNG out (bit depth preserved).
+    /// Applies the current settings to every JPEG/PNG/TIFF in a folder. Each output keeps its input's
+    /// format: JPEG in -> maximum-quality JPEG out, PNG in -> PNG out, TIFF in -> TIFF out (bit depth preserved).
     /// </summary>
     internal sealed class BatchMode : IDisposable
     {
@@ -56,7 +56,7 @@ namespace Desqueeze.App
             GUI.enabled = !_running;
 
             GUILayout.Label("BATCH DE-SQUEEZE", ui.Title);
-            GUILayout.Label("Every .jpg/.jpeg/.png in the input folder is de-squeezed with the settings on the right " +
+            GUILayout.Label("Every .jpg/.jpeg/.png/.tif/.tiff in the input folder is de-squeezed with the settings on the right " +
                             "and written to the output folder in its original format (JPEG at maximum quality).", ui.MutedSmall);
             var lens = _app.Lenses;
             var dist = _app.Settings.ActiveDistortion();
